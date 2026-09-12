@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from .base import ASRBackend
 from .openai_whisper import OpenAIWhisperBackend
@@ -16,10 +16,26 @@ def _require(config: Mapping[str, Any], key: str) -> Any:
     return config[key]
 
 
+def _require_non_empty_str(config: Mapping[str, Any], key: str) -> str:
+    value = _require(config, key)
+    if not isinstance(value, str) or not value.strip():
+        raise BackendConfigError(f"config key {key!r} must be a non-empty string")
+    return value
+
+
+def _optional_str(mapping: Mapping[str, Any], key: str) -> Optional[str]:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise BackendConfigError(f"config key {key!r} must be null or a non-empty string")
+    return value
+
+
 def create_asr_backend(config: Mapping[str, Any]) -> ASRBackend:
     """Create an ASR backend from an explicit configuration mapping."""
 
-    backend = _require(config, "backend")
+    backend = _require_non_empty_str(config, "backend")
     if backend != "openai_whisper":
         raise BackendConfigError(f"unsupported ASR backend for V0: {backend!r}")
 
@@ -38,11 +54,11 @@ def create_asr_backend(config: Mapping[str, Any]) -> ASRBackend:
         raise BackendConfigError("config key 'fp16' must be a boolean")
 
     return OpenAIWhisperBackend(
-        model_name=str(_require(config, "model")),
-        language=str(_require(config, "language")),
-        task=str(_require(config, "task")),
-        device=str(_require(config, "device")),
+        model_name=_require_non_empty_str(config, "model"),
+        language=_require_non_empty_str(config, "language"),
+        task=_require_non_empty_str(config, "task"),
+        device=_require_non_empty_str(config, "device"),
         fp16=fp16,
         temperature=decode["temperature"],
-        download_root=runtime.get("download_root"),
+        download_root=_optional_str(runtime, "download_root"),
     )

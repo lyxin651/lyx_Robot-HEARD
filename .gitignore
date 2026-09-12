@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment / secrets
+.env
+.env.*
+
+# Model weights
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# Audio / datasets / outputs
+data/
+datasets/
+outputs/
+results/
+logs/
+
+# Cache
+.cache/
+.cache*/
+wandb/
+
+# OS
+.DS_Store

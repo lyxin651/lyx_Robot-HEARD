@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -30,3 +31,14 @@ def test_malformed_json_reports_line_number(tmp_path: Path) -> None:
     manifest.write_text("not-json\n", encoding="utf-8")
     with pytest.raises(ManifestValidationError, match="line=1"):
         read_manifest(manifest, require_audio_exists=False)
+
+
+def test_duplicate_reports_physical_line_after_blank_line(tmp_path: Path) -> None:
+    audio = tmp_path / "sample.wav"
+    audio.touch()
+    first = json.dumps({"segment_id": "dup", "audio_path": str(audio)})
+    manifest = tmp_path / "duplicates.jsonl"
+    manifest.write_text(first + "\n\n" + first + "\n", encoding="utf-8")
+
+    with pytest.raises(ManifestValidationError, match="line=3"):
+        read_manifest(manifest)

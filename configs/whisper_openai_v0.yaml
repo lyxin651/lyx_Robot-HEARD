@@ -1,0 +1,12 @@
+backend: openai_whisper
+model: large-v3
+language: zh
+task: transcribe
+device: cuda
+fp16: true
+
+decode:
+  temperature: 0.0
+
+runtime:
+  download_root: null

@@ -104,6 +104,7 @@ def read_manifest(
         raise FileNotFoundError(f"manifest does not exist: {manifest_path}")
 
     items: List[Dict[str, Any]] = []
+    seen = set()
     with manifest_path.open("r", encoding="utf-8") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
             line = raw_line.strip()
@@ -119,13 +120,21 @@ def read_manifest(
                 raise ManifestValidationError(
                     f"line={line_number}: manifest record must be a JSON object"
                 )
+
+            validate_item(
+                item,
+                line_number=line_number,
+                base_dir=manifest_path.parent,
+                require_audio_exists=require_audio_exists,
+            )
+            segment_id = item["segment_id"]
+            if segment_id in seen:
+                raise ManifestValidationError(
+                    f"line={line_number}, segment_id={segment_id!r}: duplicate segment_id"
+                )
+            seen.add(segment_id)
             items.append(item)
 
-    validate_manifest(
-        items,
-        base_dir=manifest_path.parent,
-        require_audio_exists=require_audio_exists,
-    )
     return items
 
 

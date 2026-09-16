@@ -62,6 +62,8 @@ audio:
 - resampling never overwrites the source file and requires an explicit output path;
 - headerless raw PCM is not inferred automatically because sample rate/channel layout are not self-describing.
 
+The OpenAI Whisper backend also probes every input before decoding and refuses non-mono or non-16-kHz files. This prevents callers from bypassing the S3 policy and relying on Whisper's internal ffmpeg path to downmix/resample silently.
+
 Therefore MISP CSOBx3 raw 8-channel PCM must first go through an explicit upstream channel-selection, beamforming, separation, or conversion step. The ASR layer never guesses that policy.
 
 ## Single-file Whisper smoke test
@@ -72,7 +74,7 @@ python scripts/smoke_openai_whisper.py \
   --config configs/whisper_openai_v0.yaml
 ```
 
-The script validates the manifest before model loading, loads `large-v3` once, transcribes the selected segment, and prints JSON containing the segment id, text, language, and decode time.
+The script validates the manifest before model loading, loads `large-v3` once, checks the S3 audio boundary, transcribes the selected segment, and prints JSON containing the segment id, text, language, and decode time.
 
 ## Tests
 

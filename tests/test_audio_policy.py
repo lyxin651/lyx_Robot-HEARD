@@ -9,6 +9,13 @@ def test_audio_policy_defaults_match_whisper_v0_contract():
     assert policy.require_mono is True
 
 
+def test_audio_policy_constructor_rejects_non_v0_values():
+    with pytest.raises(AudioInputError, match="requires target_sample_rate=16000"):
+        AudioInputPolicy(target_sample_rate=8000)
+    with pytest.raises(AudioInputError, match="requires require_mono=true"):
+        AudioInputPolicy(require_mono=False)
+
+
 def test_audio_policy_from_config_accepts_frozen_v0_values():
     policy = audio_policy_from_config(
         {

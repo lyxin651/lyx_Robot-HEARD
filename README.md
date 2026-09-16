@@ -13,11 +13,11 @@ OpenAI Whisper `large-v3` frozen inference is the reference backend. `faster-whi
 ## Repository layout
 
 ```text
-configs/                     Runtime configuration
-src/robot_heard/asr/         ASR backend, batch/resume runner, result contracts
+configs/                     Runtime and scoring configuration
+src/robot_heard/asr/         ASR backend, batch/resume runner, scoring, result contracts
 src/robot_heard/audio/       Audio inspection and explicit mono/16-kHz preparation
 src/robot_heard/io/          Manifest contract and JSONL utilities
-scripts/                     User-facing smoke/batch entry points
+scripts/                     User-facing smoke, batch, and scoring entry points
 tests/                       Unit/integration tests
 ```
 
@@ -113,9 +113,50 @@ Resume semantics are intentionally strict:
 - malformed completed lines, duplicate completed IDs, or results from another manifest cause a hard resume error;
 - if every segment is already complete, `--resume` does not load the Whisper model again.
 
-S4 writes `text_raw`, `audio_sec`, and `decode_sec`. The `text_norm`, `reference_norm`, and `rtf` keys are reserved as `null` placeholders until S5 implements normalization/scoring/RTF under its own Gate.
+S4 writes `text_raw`, `audio_sec`, and `decode_sec`. The `text_norm`, `reference_norm`, and `rtf` keys are intentionally left as `null` placeholders in the raw batch output; S5 fills scoring fields in a **separate scored JSONL** without rerunning Whisper or mutating the raw output.
 
 The command prints progress events to stderr and a final JSON summary to stdout. If any segment fails, decoding still finishes the remaining manifest but the process exits non-zero after printing the summary so failures cannot be missed silently.
+
+## Normalization, CER, and RTF (S5)
+
+S5 is a post-processing stage over successful S4 result JSONL. This separation is deliberate: `text_raw` and the original timing records remain auditable, and future official MISP normalization/scoring can be substituted without rerunning Whisper.
+
+The local V0 scoring config is explicit:
+
+```yaml
+normalization_policy: v0_nfkc_casefold_strip_space_punct
+```
+
+The policy performs Unicode NFKC normalization, Unicode `casefold()`, and removes Unicode whitespace plus punctuation characters. It does **not** perform traditional/simplified Chinese conversion, number verbalization, event-tag removal, or other challenge-specific text rewriting.
+
+This policy is a local diagnostic baseline only. **The official MISP normalization/scoring script is authoritative once available.** Results from this policy must not be described as official MISP CER unless parity with the official scorer has been verified.
+
+Run scoring independently from inference:
+
+```bash
+python scripts/score_results.py \
+  --input /path/to/results.jsonl \
+  --config configs/scoring_v0.yaml \
+  --output /path/to/results.scored.jsonl
+```
+
+The scored output preserves every raw field and adds/fills:
+
+```text
+result_schema_version=2
+normalization_policy
+text_norm
+reference_norm              # null if no reference exists
+rtf                         # decode_sec / audio_sec
+cer_s / cer_d / cer_i / cer_n
+cer                         # null when reference is absent or normalized N=0
+```
+
+Character error counts are computed with deterministic Levenshtein alignment. Segment CER is `(S + D + I) / N` when `N > 0`. For records without `reference`, normalization and RTF are still produced while all CER/reference scoring fields remain null.
+
+A metrics sidecar is written next to the scored JSONL by default (for example `results.scored.metrics.json`). It records input/config SHA-256 values, full scoring config, Git commit, record counts, summed audio/decode seconds, **global RTF = sum(decode_sec) / sum(audio_sec)**, aggregate S/D/I/N, and aggregate global CER. Global CER is computed from aggregate edit counts, not by averaging per-segment CER values.
+
+Scoring is atomic: malformed input or a scoring validation failure leaves no partial output. Input and output paths must differ so the original S4 result JSONL remains intact. Existing scored output/summary files are not overwritten unless `--overwrite` is explicitly provided.
 
 ## Tests
 

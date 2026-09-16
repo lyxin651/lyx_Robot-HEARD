@@ -17,7 +17,8 @@ configs/                     Runtime and scoring configuration
 src/robot_heard/asr/         ASR backend, batch/resume runner, scoring, result contracts
 src/robot_heard/audio/       Audio inspection and explicit mono/16-kHz preparation
 src/robot_heard/io/          Manifest contract and JSONL utilities
-scripts/                     User-facing smoke, batch, and scoring entry points
+src/robot_heard/misp/        Challenge-specific MISP export adapters
+scripts/                     User-facing smoke, batch, scoring, and export entry points
 tests/                       Unit/integration tests
 ```
 
@@ -157,6 +158,35 @@ Character error counts are computed with deterministic Levenshtein alignment. Se
 A metrics sidecar is written next to the scored JSONL by default (for example `results.scored.metrics.json`). It records input/config SHA-256 values, full scoring config, Git commit, record counts, summed audio/decode seconds, **global RTF = sum(decode_sec) / sum(audio_sec)**, aggregate S/D/I/N, and aggregate global CER. Global CER is computed from aggregate edit counts, not by averaging per-segment CER values.
 
 Scoring is atomic: malformed input or a scoring validation failure leaves no partial output. Input and output paths must differ so the original S4 result JSONL remains intact. Existing scored output/summary files are not overwritten unless `--overwrite` is explicitly provided.
+
+## MISP 2025 Task 2 submission export (S6)
+
+S6 is challenge-specific post-processing and never reruns Whisper. The official MISP 2025 Task 2 / AVSR submission page documents a zip package named `summission.zip` containing a single root file named `summission.txt`; each transcript row is `segment_id transcript`, and the transcript part contains Chinese characters only without punctuation. The exporter intentionally preserves the spelling used by the official challenge page.
+
+```bash
+python scripts/export_misp_task2.py \
+  --input /path/to/results.jsonl \
+  --output-dir /path/to/misp_task2_submission \
+  --expected-segments /path/to/authoritative_segment_list.txt
+```
+
+The output directory contains:
+
+```text
+summission.txt          human-inspectable transcript
+summission.zip          upload package; zip root contains only summission.txt
+summission.export.json  input/output hashes, policy, code commit, expected-ID evidence
+```
+
+The exporter always uses `text_raw`; it does not reuse the local S5 normalizer as if it were an official MISP scorer. Its submission-surface policy applies NFKC, removes Unicode whitespace/punctuation, and then **rejects** remaining non-Han semantic content (for example Latin letters or Arabic digits) rather than silently deleting it. Empty post-normalization transcripts are also rejected. This makes policy gaps visible during integration instead of corrupting text silently.
+
+`--expected-segments` is optional for module-level experiments but required by the S6I real-integration Gate. It accepts one segment ID per line, official-style `segment_id transcript` lines, or manifest JSONL containing `segment_id`; the exporter then requires exact ID-set equality before writing submission artifacts.
+
+The MISP 2025 Task 3 / AVDR submission contract is different: it requires per-session text files with `local_speaker_id transcript`. Speaker assignment remains an upstream diarization/AVDR responsibility and is deliberately not guessed inside this ASR exporter.
+
+## MISP Integration Compatibility (S6I)
+
+Passing module tests is not sufficient to claim that the backend is MISP-ready. Before S7, at least one real MISP Dev session must be run from actual baseline segmentation/reference/frontend artifacts through manifest/waveform preparation, Whisper batch inference, S5 scoring, and S6 export without hand-editing intermediate files. Segment counts and exact ID sets must reconcile at each stage. If a runnable official scorer/evaluator is available, parity must also be checked; otherwise the limitation remains explicitly `PENDING_EXTERNAL_SCORER_PARITY`.
 
 ## Tests
 

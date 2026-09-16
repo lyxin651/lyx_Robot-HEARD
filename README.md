@@ -15,9 +15,10 @@ OpenAI Whisper `large-v3` frozen inference is the reference backend. `faster-whi
 ```text
 configs/                     Runtime configuration
 src/robot_heard/asr/         ASR backend interface and implementations
+src/robot_heard/audio/       Audio inspection and explicit mono/16-kHz preparation
 src/robot_heard/io/          Manifest contract and JSONL utilities
 scripts/                     User-facing smoke/evaluation entry points
-tests/                       Unit tests
+tests/                       Unit/integration tests
 ```
 
 ## Environment setup
@@ -29,7 +30,7 @@ python -m pip install -r requirements.txt
 python -m pip install -e .
 ```
 
-OpenAI Whisper also requires `ffmpeg` on the system path.
+OpenAI Whisper and the S3 audio layer require `ffmpeg`/`ffprobe` on the system path.
 
 ## Manifest contract
 
@@ -41,7 +42,29 @@ Minimum JSONL record:
 
 Recommended metadata can include `session_id`, `speaker_id`, `start`, `duration`, `frontend`, and (for development scoring) `reference`. Relative `audio_path` values are resolved relative to the manifest file.
 
-## Single-file smoke test
+## Audio input contract (S3)
+
+Whisper V0 uses an explicit audio policy:
+
+```yaml
+audio:
+  target_sample_rate: 16000
+  require_mono: true
+```
+
+`robot_heard.audio.probe_audio()` records source sample rate, channel count, duration, codec, and resolved path using `ffprobe`.
+
+`robot_heard.audio.prepare_audio()` behaves deliberately:
+
+- mono 16-kHz audio is passed through unchanged;
+- mono audio at another sample rate is resampled to a caller-specified PCM-s16le WAV using `ffmpeg`;
+- multi-channel input is rejected **before conversion** rather than averaged/downmixed;
+- resampling never overwrites the source file and requires an explicit output path;
+- headerless raw PCM is not inferred automatically because sample rate/channel layout are not self-describing.
+
+Therefore MISP CSOBx3 raw 8-channel PCM must first go through an explicit upstream channel-selection, beamforming, separation, or conversion step. The ASR layer never guesses that policy.
+
+## Single-file Whisper smoke test
 
 ```bash
 python scripts/smoke_openai_whisper.py \
@@ -56,6 +79,8 @@ The script validates the manifest before model loading, loads `large-v3` once, t
 ```bash
 python -m pytest -q
 ```
+
+Audio integration tests use `ffmpeg`/`ffprobe` when available and are skipped when those executables are absent. Real MISP audio and 5090 validation remain separate Gate evidence.
 
 ## Project authority
 

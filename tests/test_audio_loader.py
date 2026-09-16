@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from robot_heard.audio import AudioInputError, prepare_audio, probe_audio
+from robot_heard.audio import AudioInputError, AudioToolError, prepare_audio, probe_audio
 
 
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
@@ -33,6 +33,14 @@ def test_probe_audio_reports_self_describing_metadata(tmp_path):
     assert metadata.channels == 1
     assert metadata.duration_sec == pytest.approx(0.2, abs=0.01)
     assert metadata.codec_name == "pcm_s16le"
+
+
+def test_probe_audio_rejects_corrupt_file(tmp_path):
+    path = tmp_path / "corrupt.wav"
+    path.write_text("not audio", encoding="utf-8")
+
+    with pytest.raises(AudioToolError, match="ffprobe failed"):
+        probe_audio(path)
 
 
 def test_prepare_audio_passes_through_16k_mono(tmp_path):

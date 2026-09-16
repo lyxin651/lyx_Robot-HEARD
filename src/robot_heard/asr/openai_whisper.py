@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 from typing import Optional, Union
 
+from robot_heard.audio import AudioInputError, probe_audio
+
 from .base import ASRBackend, ASRResult
 
 
@@ -61,9 +63,21 @@ class OpenAIWhisperBackend(ASRBackend):
             parameter.requires_grad_(False)
 
     def transcribe(self, audio_path: Union[str, Path]) -> ASRResult:
-        path = Path(audio_path).expanduser()
+        path = Path(audio_path).expanduser().resolve(strict=False)
         if not path.is_file():
             raise FileNotFoundError(f"audio file does not exist: {path}")
+
+        metadata = probe_audio(path)
+        if metadata.channels != 1:
+            raise AudioInputError(
+                f"{path}: ASR backend requires an explicit mono target waveform; "
+                f"got {metadata.channels} channels"
+            )
+        if metadata.sample_rate != 16000:
+            raise AudioInputError(
+                f"{path}: ASR backend requires 16000 Hz prepared audio; "
+                f"got {metadata.sample_rate} Hz. Use robot_heard.audio.prepare_audio upstream."
+            )
 
         start = time.perf_counter()
         result = self._model.transcribe(

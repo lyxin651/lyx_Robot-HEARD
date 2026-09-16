@@ -37,6 +37,14 @@ class AudioInputPolicy:
     target_sample_rate: int = 16000
     require_mono: bool = True
 
+    def __post_init__(self) -> None:
+        if isinstance(self.target_sample_rate, bool) or not isinstance(self.target_sample_rate, int):
+            raise AudioInputError("target_sample_rate must be an integer")
+        if self.target_sample_rate != 16000:
+            raise AudioInputError("Whisper V0 requires target_sample_rate=16000")
+        if self.require_mono is not True:
+            raise AudioInputError("Whisper V0 requires require_mono=true")
+
 
 @dataclass(frozen=True)
 class PreparedAudio:
@@ -181,12 +189,14 @@ def probe_audio(path: PathLike) -> AudioMetadata:
 
 
 def _validate_source(metadata: AudioMetadata, policy: AudioInputPolicy) -> None:
-    if policy.require_mono and metadata.channels != 1:
+    if metadata.channels != 1:
         raise AudioInputError(
             f"{metadata.path}: multichannel input rejected ({metadata.channels} channels). "
             "Whisper V0 never performs implicit averaging/downmix; select/beamform/separate "
             "an explicit single-channel target waveform upstream."
         )
+    if not policy.require_mono:
+        raise AudioInputError("Whisper V0 requires mono input policy")
 
 
 def prepare_audio(
@@ -259,7 +269,7 @@ def prepare_audio(
                 f"ffmpeg output sample rate mismatch: expected "
                 f"{active_policy.target_sample_rate}, got {prepared.sample_rate}"
             )
-        if active_policy.require_mono and prepared.channels != 1:
+        if prepared.channels != 1:
             raise AudioInputError(
                 f"ffmpeg output channel mismatch: expected mono, got {prepared.channels} channels"
             )

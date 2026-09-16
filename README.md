@@ -14,10 +14,10 @@ OpenAI Whisper `large-v3` frozen inference is the reference backend. `faster-whi
 
 ```text
 configs/                     Runtime configuration
-src/robot_heard/asr/         ASR backend interface and implementations
+src/robot_heard/asr/         ASR backend, batch/resume runner, result contracts
 src/robot_heard/audio/       Audio inspection and explicit mono/16-kHz preparation
 src/robot_heard/io/          Manifest contract and JSONL utilities
-scripts/                     User-facing smoke/evaluation entry points
+scripts/                     User-facing smoke/batch entry points
 tests/                       Unit/integration tests
 ```
 
@@ -75,6 +75,47 @@ python scripts/smoke_openai_whisper.py \
 ```
 
 The script validates the manifest before model loading, loads `large-v3` once, checks the S3 audio boundary, transcribes the selected segment, and prints JSON containing the segment id, text, language, and decode time.
+
+## Batch decode and resume (S4)
+
+Batch decoding uses one backend instance for the whole run and writes each successful segment immediately to the result JSONL with `flush + fsync`. Per-segment failures are appended to a separate error JSONL and do not stop later segments.
+
+```bash
+python scripts/decode_manifest.py \
+  --manifest /path/to/manifest.jsonl \
+  --config configs/whisper_openai_v0.yaml \
+  --output /path/to/results.jsonl
+```
+
+Default sidecars for `results.jsonl` are:
+
+```text
+results.run.json      exact manifest/config hashes, full config, backend/model, code commit
+results.errors.jsonl  append-only failure-attempt history (created only after a failure)
+```
+
+A fresh run refuses to overwrite existing run artifacts. To continue an interrupted run:
+
+```bash
+python scripts/decode_manifest.py \
+  --manifest /path/to/manifest.jsonl \
+  --config configs/whisper_openai_v0.yaml \
+  --output /path/to/results.jsonl \
+  --resume
+```
+
+Resume semantics are intentionally strict:
+
+- only prior `status="success"` result records are skipped;
+- prior failures are retried and their old error entries remain as history;
+- manifest/config/code provenance must match the original run metadata;
+- a trailing partial JSONL record caused by interruption is truncated before resume;
+- malformed completed lines, duplicate completed IDs, or results from another manifest cause a hard resume error;
+- if every segment is already complete, `--resume` does not load the Whisper model again.
+
+S4 writes `text_raw`, `audio_sec`, and `decode_sec`. The `text_norm`, `reference_norm`, and `rtf` keys are reserved as `null` placeholders until S5 implements normalization/scoring/RTF under its own Gate.
+
+The command prints progress events to stderr and a final JSON summary to stdout. If any segment fails, decoding still finishes the remaining manifest but the process exits non-zero after printing the summary so failures cannot be missed silently.
 
 ## Tests
 

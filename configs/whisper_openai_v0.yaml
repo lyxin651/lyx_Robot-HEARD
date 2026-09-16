@@ -5,6 +5,10 @@ task: transcribe
 device: cuda
 fp16: true
 
+audio:
+  target_sample_rate: 16000
+  require_mono: true
+
 decode:
   temperature: 0.0
 

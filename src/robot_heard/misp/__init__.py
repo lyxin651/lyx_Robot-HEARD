@@ -1,3 +1,16 @@
+from .kaldi_adapter import (
+    MISP2025_KALDI_ADAPTER_POLICY,
+    MISP2025_KALDI_CHANNELS,
+    KaldiSegment,
+    MISPKaldiAdapterError,
+    MISPKaldiAdapterSummary,
+    prepare_misp_kaldi_recording,
+    read_kaldi_scp,
+    read_kaldi_segments,
+    read_kaldi_text,
+    resolve_misp_channel_path,
+    validate_segment_text_ids,
+)
 from .task2_export import (
     MISP2025_TASK2_ARCHIVE_NAME,
     MISP2025_TASK2_EXPORT_POLICY,
@@ -14,6 +27,17 @@ from .task2_export import (
 )
 
 __all__ = [
+    "MISP2025_KALDI_ADAPTER_POLICY",
+    "MISP2025_KALDI_CHANNELS",
+    "KaldiSegment",
+    "MISPKaldiAdapterError",
+    "MISPKaldiAdapterSummary",
+    "prepare_misp_kaldi_recording",
+    "read_kaldi_scp",
+    "read_kaldi_segments",
+    "read_kaldi_text",
+    "resolve_misp_channel_path",
+    "validate_segment_text_ids",
     "MISP2025_TASK2_ARCHIVE_NAME",
     "MISP2025_TASK2_EXPORT_POLICY",
     "MISP2025_TASK2_FORMAT_URL",

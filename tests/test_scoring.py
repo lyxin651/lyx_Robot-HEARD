@@ -57,6 +57,14 @@ def test_character_error_counts_insertion():
     assert counts.reference_chars == 2
 
 
+def test_character_error_counts_matches_misp_equal_cost_tie_breaking():
+    counts = character_error_counts("ab", "ba")
+    assert counts.errors == 2
+    assert (counts.substitutions, counts.deletions, counts.insertions) == (0, 1, 1)
+    assert counts.reference_chars == 2
+    assert counts.cer == pytest.approx(1.0)
+
+
 def test_character_error_counts_empty_reference_has_no_rate():
     counts = character_error_counts("", "a")
     assert counts.insertions == 1

@@ -87,41 +87,48 @@ def character_error_counts(reference: str, hypothesis: str) -> CharacterErrorCou
         raise ScoringError("reference and hypothesis must be strings")
 
     # State: (edit_cost, substitutions, deletions, insertions).
-    # Equal-cost paths are resolved deterministically by candidate order:
-    # diagonal (match/substitute), deletion, insertion.
+    # Match the released MISP compute-wer.py alignment semantics exactly:
+    # candidates are considered in deletion, insertion, diagonal order and a
+    # candidate replaces the current best only when its cost is strictly lower.
+    # Therefore equal-cost ties prefer deletion, then insertion, then diagonal.
     previous = [(index, 0, 0, index) for index in range(len(hypothesis) + 1)]
 
     for ref_index, ref_char in enumerate(reference, start=1):
         current = [(ref_index, 0, ref_index, 0)]
         for hyp_index, hyp_char in enumerate(hypothesis, start=1):
-            diagonal = previous[hyp_index - 1]
+            deletion_prev = previous[hyp_index]
+            deletion = (
+                deletion_prev[0] + 1,
+                deletion_prev[1],
+                deletion_prev[2] + 1,
+                deletion_prev[3],
+            )
+
+            insertion_prev = current[hyp_index - 1]
+            insertion = (
+                insertion_prev[0] + 1,
+                insertion_prev[1],
+                insertion_prev[2],
+                insertion_prev[3] + 1,
+            )
+
+            diagonal_prev = previous[hyp_index - 1]
             if ref_char == hyp_char:
-                best = diagonal
+                diagonal = diagonal_prev
             else:
-                substitution = (
-                    diagonal[0] + 1,
-                    diagonal[1] + 1,
-                    diagonal[2],
-                    diagonal[3],
+                diagonal = (
+                    diagonal_prev[0] + 1,
+                    diagonal_prev[1] + 1,
+                    diagonal_prev[2],
+                    diagonal_prev[3],
                 )
-                deletion_prev = previous[hyp_index]
-                deletion = (
-                    deletion_prev[0] + 1,
-                    deletion_prev[1],
-                    deletion_prev[2] + 1,
-                    deletion_prev[3],
-                )
-                insertion_prev = current[hyp_index - 1]
-                insertion = (
-                    insertion_prev[0] + 1,
-                    insertion_prev[1],
-                    insertion_prev[2],
-                    insertion_prev[3] + 1,
-                )
-                best = min(
-                    (substitution, deletion, insertion),
-                    key=lambda candidate: candidate[0],
-                )
+
+            best = deletion
+            if insertion[0] < best[0]:
+                best = insertion
+            if diagonal[0] < best[0]:
+                best = diagonal
+
             current.append(best)
         previous = current
 

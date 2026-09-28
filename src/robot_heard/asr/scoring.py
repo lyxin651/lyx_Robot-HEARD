@@ -161,10 +161,13 @@ def score_result_record(
     record: Mapping[str, Any],
     *,
     normalization_policy: str = NORMALIZATION_POLICY_V0,
+    text_field: str = "text_raw",
 ) -> Dict[str, Any]:
     validate_normalization_policy(normalization_policy)
     if not isinstance(record, Mapping):
         raise ScoringError("result record must be a mapping")
+    if not isinstance(text_field, str) or not text_field.strip():
+        raise ScoringError("text_field must be a non-empty string")
     if record.get("status") != "success":
         raise ScoringError("S5 scoring accepts only status='success' records")
 
@@ -176,6 +179,12 @@ def score_result_record(
     if not isinstance(text_raw, str):
         raise ScoringError(f"segment_id={segment_id!r}: text_raw must be a string")
 
+    scoring_text = record.get(text_field)
+    if not isinstance(scoring_text, str):
+        raise ScoringError(
+            f"segment_id={segment_id!r}: {text_field} must be a string"
+        )
+
     reference = record.get("reference")
     if reference is not None and not isinstance(reference, str):
         raise ScoringError(
@@ -185,13 +194,14 @@ def score_result_record(
     audio_sec = record.get("audio_sec")
     decode_sec = record.get("decode_sec")
     rtf = compute_rtf(decode_sec=decode_sec, audio_sec=audio_sec)
-    text_norm = normalize_text(text_raw, policy=normalization_policy)
+    text_norm = normalize_text(scoring_text, policy=normalization_policy)
 
     scored = dict(record)
     scored.update(
         {
             "result_schema_version": 2,
             "normalization_policy": normalization_policy,
+            "scoring_text_field": text_field,
             "text_norm": text_norm,
             "rtf": rtf,
         }
@@ -275,9 +285,12 @@ def score_results_jsonl(
     output_path: PathLike,
     *,
     normalization_policy: str = NORMALIZATION_POLICY_V0,
+    text_field: str = "text_raw",
     overwrite: bool = False,
 ) -> ScoringSummary:
     validate_normalization_policy(normalization_policy)
+    if not isinstance(text_field, str) or not text_field.strip():
+        raise ScoringError("text_field must be a non-empty string")
     source = Path(input_path).expanduser().resolve(strict=True)
     output = Path(output_path).expanduser().resolve(strict=False)
 
@@ -332,6 +345,7 @@ def score_results_jsonl(
                 scored = score_result_record(
                     record,
                     normalization_policy=normalization_policy,
+                    text_field=text_field,
                 )
                 output_handle.write(json.dumps(scored, ensure_ascii=False) + "\n")
                 accumulator.add(scored)

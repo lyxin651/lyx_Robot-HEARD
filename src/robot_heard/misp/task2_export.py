@@ -42,6 +42,7 @@ class MISPTask2ExportSummary:
     expected_segments_validated: bool
     expected_segments_path: Optional[str]
     text_policy: str
+    input_text_field: str = "text_raw"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -137,8 +138,15 @@ def _parse_json_result_line(
     return record
 
 
-def read_export_records(input_path: PathLike) -> List[Dict[str, Any]]:
-    """Read validated S4/S5 success results for challenge export."""
+def read_export_records(
+    input_path: PathLike,
+    *,
+    text_field: str = "text_raw",
+) -> List[Dict[str, Any]]:
+    """Read validated S4/S5 or explicit S6I-derived results for export."""
+
+    if not isinstance(text_field, str) or not text_field.strip():
+        raise MISPTask2ExportError("text_field must be a non-empty string")
 
     source = Path(input_path).expanduser().resolve(strict=True)
     records: List[Dict[str, Any]] = []
@@ -176,14 +184,23 @@ def read_export_records(input_path: PathLike) -> List[Dict[str, Any]]:
                     "text_raw must be a string"
                 )
 
+            export_text = record.get(text_field)
+            if not isinstance(export_text, str):
+                raise MISPTask2ExportError(
+                    f"{source}: line {line_number}, segment_id={segment_id!r}: "
+                    f"{text_field} must be a string"
+                )
+
             normalized_text = normalize_misp2025_task2_text(
-                text_raw,
+                export_text,
                 segment_id=segment_id,
             )
             records.append(
                 {
                     "segment_id": segment_id,
                     "text_raw": text_raw,
+                    "export_text": export_text,
+                    "text_field": text_field,
                     "submission_text": normalized_text,
                 }
             )
@@ -341,6 +358,7 @@ def export_misp2025_task2_submission(
     output_dir: PathLike,
     *,
     expected_segments_path: Optional[PathLike] = None,
+    text_field: str = "text_raw",
     overwrite: bool = False,
     code_commit: Optional[str] = None,
 ) -> MISPTask2ExportSummary:
@@ -369,7 +387,7 @@ def export_misp2025_task2_submission(
             f"or use overwrite=True: {rendered}"
         )
 
-    records = read_export_records(source)
+    records = read_export_records(source, text_field=text_field)
 
     expected_validated = False
     expected_path: Optional[Path] = None
@@ -399,6 +417,7 @@ def export_misp2025_task2_submission(
         "input_sha256": _sha256_file(source),
         "records": len(records),
         "text_policy": MISP2025_TASK2_EXPORT_POLICY,
+        "input_text_field": text_field,
         "transcript_path": str(transcript_path),
         "transcript_member_name": MISP2025_TASK2_TRANSCRIPT_NAME,
         "transcript_sha256": _sha256_bytes(transcript_bytes),
@@ -422,4 +441,5 @@ def export_misp2025_task2_submission(
             str(expected_path) if expected_path is not None else None
         ),
         text_policy=MISP2025_TASK2_EXPORT_POLICY,
+        input_text_field=text_field,
     )

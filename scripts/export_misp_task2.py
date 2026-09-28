@@ -46,6 +46,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--text-field",
+        default="text_raw",
+        help=(
+            "Transcript field to export. Default text_raw is the frozen V0 path; "
+            "S6I derived artifacts may explicitly select text_submission."
+        ),
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Replace existing S6 export artifacts in --output-dir.",
@@ -60,6 +68,7 @@ def main() -> None:
         args.input,
         args.output_dir,
         expected_segments_path=args.expected_segments,
+        text_field=args.text_field,
         overwrite=args.overwrite,
         code_commit=_git_head(repo_root),
     )

@@ -90,6 +90,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
+        "--text-field",
+        default="text_raw",
+        help=(
+            "Record field to score. The default text_raw preserves the V0 contract; "
+            "S6I derived artifacts may explicitly select text_recognition or text_submission."
+        ),
+    )
+    parser.add_argument(
         "--summary",
         type=Path,
         default=None,
@@ -133,6 +141,7 @@ def main() -> None:
         input_path,
         output_path,
         normalization_policy=policy,
+        text_field=args.text_field,
         overwrite=args.overwrite,
     )
 
@@ -146,6 +155,7 @@ def main() -> None:
         "scoring_config_path": str(config_path),
         "scoring_config_sha256": _sha256_file(config_path),
         "scoring_config": config,
+        "text_field": args.text_field,
         "code_commit": _git_head(repo_root),
         **summary.to_dict(),
     }

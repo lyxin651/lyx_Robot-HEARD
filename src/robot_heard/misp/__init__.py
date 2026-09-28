@@ -25,6 +25,18 @@ from .task2_export import (
     render_misp2025_task2_transcript,
     validate_expected_segment_ids,
 )
+from .s6i_remediation import (
+    MISP2025_S6I_NUMERIC_SURFACE_POLICY,
+    MISP2025_S6I_REMEDIATION_POLICY,
+    MISP2025_S6I_RETRY_POLICY,
+    NumericReplacement,
+    NumericSurfaceResult,
+    S6IRemediationError,
+    build_s6i_remediated_records,
+    normalize_misp2025_s6i_numeric_surface,
+    remediate_s6i_record,
+    write_s6i_remediated_jsonl,
+)
 
 __all__ = [
     "MISP2025_KALDI_ADAPTER_POLICY",
@@ -50,4 +62,14 @@ __all__ = [
     "read_export_records",
     "render_misp2025_task2_transcript",
     "validate_expected_segment_ids",
+    "MISP2025_S6I_NUMERIC_SURFACE_POLICY",
+    "MISP2025_S6I_REMEDIATION_POLICY",
+    "MISP2025_S6I_RETRY_POLICY",
+    "NumericReplacement",
+    "NumericSurfaceResult",
+    "S6IRemediationError",
+    "build_s6i_remediated_records",
+    "normalize_misp2025_s6i_numeric_surface",
+    "remediate_s6i_record",
+    "write_s6i_remediated_jsonl",
 ]

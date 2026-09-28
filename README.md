@@ -178,7 +178,33 @@ summission.zip          upload package; zip root contains only summission.txt
 summission.export.json  input/output hashes, policy, code commit, expected-ID evidence
 ```
 
-The exporter always uses `text_raw`; it does not reuse the local S5 normalizer as if it were an official MISP scorer. Its submission-surface policy applies NFKC, removes Unicode whitespace/punctuation, and then **rejects** remaining non-Han semantic content (for example Latin letters or Arabic digits) rather than silently deleting it. Empty post-normalization transcripts are also rejected. This makes policy gaps visible during integration instead of corrupting text silently.
+The exporter defaults to `text_raw`; it does not reuse the local S5 normalizer as if it were an official MISP scorer. An explicit field such as S6I's `text_submission` can be selected with `--text-field`, while the primary `text_raw` remains preserved. Its submission-surface policy applies NFKC, removes Unicode whitespace/punctuation, and then **rejects** remaining non-Han semantic content (for example Latin letters or Arabic digits) rather than silently deleting it. Empty post-normalization transcripts are also rejected. This makes policy gaps visible during integration instead of corrupting text silently.
+
+S6I compatibility remediation is a separate adapter, not part of the Whisper backend. It preserves the frozen primary `text_raw` and derives `text_recognition` plus `text_submission`. A retry result may be bound only when the primary `text_raw` is empty. The retry uses the explicit `no_speech_threshold=None` diagnostic policy and must be supplied as a separately provenance-tracked artifact. Numeric surface normalization is reference-independent and fail-closed: it converts only standalone ASCII integers `0..99` without leading zeroes, signs, decimal/date/phone punctuation, or alphanumeric mixing to fixed Mandarin cardinal forms. Any unsupported content remaining after that step is rejected by the strict Task-2 validator.
+
+For an S6I-derived JSONL, score or export the explicit derived field rather than treating it as primary ASR evidence:
+
+```bash
+python scripts/remediate_s6i.py \
+  --primary /path/to/gss_default_results.jsonl \
+  --retry /path/to/residual_retry_results.jsonl \
+  --output /path/to/remediated.jsonl \
+  --metadata /path/to/remediated.metadata.json
+
+python scripts/score_results.py \
+  --input /path/to/remediated.jsonl \
+  --config configs/scoring_v0.yaml \
+  --output /path/to/remediated.recognition.scored.jsonl \
+  --text-field text_recognition
+
+python scripts/export_misp_task2.py \
+  --input /path/to/remediated.jsonl \
+  --output-dir /path/to/misp_task2_submission \
+  --expected-segments /path/to/authoritative_segment_list.txt \
+  --text-field text_submission
+```
+
+Scoring/export metadata records the selected field. The original primary `text_raw`, retry record, numeric replacements, policy versions, and code provenance remain auditable.
 
 `--expected-segments` is optional for module-level experiments but required by the S6I real-integration Gate. It accepts one segment ID per line, official-style `segment_id transcript` lines, or manifest JSONL containing `segment_id`; the exporter then requires exact ID-set equality before writing submission artifacts.
 

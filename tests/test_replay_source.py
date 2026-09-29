@@ -48,6 +48,30 @@ def test_synthetic_source_is_repeatable_without_mutating_input():
     assert samples == ([1, 2, 3], [4, 5, 6])
 
 
+def test_synthetic_source_content_hash_is_stable_and_content_sensitive():
+    source_a = SyntheticSource(
+        ((1, 2, 3),), sample_rate=1000, packet_samples=2, stream_id="hash"
+    )
+    source_b = SyntheticSource(
+        ((1, 2, 3),), sample_rate=1000, packet_samples=2, stream_id="hash"
+    )
+    source_c = SyntheticSource(
+        ((1, 2, 4),), sample_rate=1000, packet_samples=2, stream_id="hash"
+    )
+
+    assert source_a.content_sha256 == source_b.content_sha256
+    assert source_a.identity() == source_b.identity()
+    assert source_a.content_sha256 != source_c.content_sha256
+    assert source_a.identity() != source_c.identity()
+
+
+def test_synthetic_source_rejects_unhashable_sample_type():
+    with pytest.raises(ContractValidationError, match="unsupported type"):
+        SyntheticSource(
+            ((object(),),), sample_rate=1000, packet_samples=1, stream_id="hash"
+        )
+
+
 @pytest.mark.parametrize(
     "kwargs, message",
     [

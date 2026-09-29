@@ -33,7 +33,12 @@ class _ScopeState:
 
 
 class LifecycleValidator:
-    """Validate output lifecycle and capability-dependent invariants."""
+    """Validate output lifecycle and capability-dependent invariants.
+
+    ``ErrorEvent(recoverable=True)`` is the adapter's explicit declaration
+    that the scope may continue.  No implicit recovery is inferred from the
+    error message or from later output.
+    """
 
     def __init__(self, stream_id: str, capabilities: ConsumerCapabilities) -> None:
         self.stream_id = stream_id
@@ -88,10 +93,6 @@ class LifecycleValidator:
             delivered=delivered,
         )
         state = self._scope(event.scope_id)
-        if state.final:
-            raise ContractValidationError(
-                f"scope {event.scope_id!r} is final; later events are forbidden"
-            )
         if state.fatal_error:
             raise ContractValidationError(
                 f"scope {event.scope_id!r} has fatal error; later events are forbidden"
@@ -106,6 +107,10 @@ class LifecycleValidator:
         state = self._validate_common(event, available=available, delivered=delivered)
 
         if isinstance(event, HypothesisEvent):
+            if state.final:
+                raise ContractValidationError(
+                    f"scope {event.scope_id!r} is final; later hypotheses are forbidden"
+                )
             if event.kind is HypothesisKind.PARTIAL and not self.capabilities.supports_partial:
                 raise ContractValidationError("consumer emitted PARTIAL without capability")
             if state.current_hypothesis is None:
@@ -163,6 +168,10 @@ class LifecycleValidator:
             self._event_ids.add(event.event_id)
             return
 
+        if state.final:
+            raise ContractValidationError(
+                f"scope {event.scope_id!r} is final; later errors are forbidden"
+            )
         self._event_ids.add(event.event_id)
         if event.fatal:
             state.fatal_error = True

@@ -377,6 +377,10 @@ class TraceEvent:
     logical_sample_position: Optional[int]
     payload: Mapping[str, Any]
     sequence_id: Optional[int] = None
+    # R1 is compute-unaware, so this is explicitly null.  R3 may populate
+    # the slot with a non-negative monotonic offset without changing the
+    # persisted event shape.
+    wall_offset_sec: Optional[float] = None
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.schema_version, "schema_version")
@@ -390,6 +394,7 @@ class TraceEvent:
         _validate_optional_sample(self.logical_sample_position, "logical_sample_position")
         if self.sequence_id is not None:
             _require_non_negative_int(self.sequence_id, "sequence_id")
+        _validate_optional_wall_time(self.wall_offset_sec, "wall_offset_sec")
         if not isinstance(self.payload, Mapping):
             raise ContractValidationError("payload must be a mapping")
         object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
@@ -403,6 +408,7 @@ class TraceEvent:
             "stream_id": self.stream_id,
             "event_type": self.event_type.value,
             "logical_sample_position": self.logical_sample_position,
+            "wall_offset_sec": self.wall_offset_sec,
             "payload": dict(self.payload),
         }
         if self.sequence_id is not None:

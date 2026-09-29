@@ -23,7 +23,11 @@ from robot_heard.streaming.base import StreamingConsumer
 from replay_helpers import (
     EndpointThenFinalConsumer,
     FatalThenFinalConsumer,
+    FinalThenEndpointConsumer,
+    FinalThenPartialConsumer,
+    FinalThenSecondFinalConsumer,
     RecordingConsumer,
+    RecoverableThenPartialConsumer,
     SnapshotConsumer,
 )
 
@@ -37,16 +41,32 @@ def _writer(tmp_path: Path, source: SyntheticSource, consumer, run_id: str = "ru
         "run_id": run_id,
         "replay_mode": "COMPUTE_UNAWARE",
         "source_identity": source.identity(),
+        "source_sha256": source.content_sha256,
         "source_sample_rate": source.metadata.sample_rate,
         "channel_ids": list(source.metadata.channel_ids),
         "packet_samples": source.packet_samples,
         "queue_policy": "lossless_unbounded",
+        "timeline_authority": "integer_sample_index",
         "consumer_identity": type(consumer).__name__,
+        "consumer_config": {},
         "consumer_capabilities": dict(capabilities.to_dict()),
         "code_commit": "test",
         "oracle_condition": "synthetic_none",
+        "warmup_load_policy": {
+            "model_load": "not_applicable",
+            "warmup": "not_applicable",
+        },
         "clock_policy": "integer_sample_fake_clock",
+        "clock_origin": {
+            "kind": "logical_sample",
+            "wall_offset_sec": "unavailable",
+        },
+        "metric_window": {
+            "start_sample": 0,
+            "end_sample": source.total_samples,
+        },
         "trace_path": str(trace_path),
+        "device_provenance": {"status": "not_applicable"},
     }
     return TraceWriter(trace_path, run_path, provenance), trace_path, run_path
 
@@ -193,6 +213,51 @@ def test_endpoint_is_not_final_and_later_final_is_allowed(tmp_path):
     assert output_types == ["ENDPOINT", "HYPOTHESIS"]
 
 
+def test_final_then_endpoint_is_allowed(tmp_path):
+    source = _source(sample_count=1, packet_samples=1)
+    consumer = FinalThenEndpointConsumer()
+    writer, trace_path, _ = _writer(tmp_path, source, consumer)
+
+    DeterministicReplayRuntime(source, consumer, writer).run()
+    output_types = [
+        record["event_type"]
+        for record in _records(trace_path)
+        if record["event_type"] in {"ENDPOINT", "HYPOTHESIS"}
+    ]
+
+    assert output_types == ["HYPOTHESIS", "ENDPOINT"]
+
+
+@pytest.mark.parametrize(
+    "consumer, message",
+    [
+        (FinalThenPartialConsumer(), "later hypotheses"),
+        (FinalThenSecondFinalConsumer(), "later hypotheses"),
+    ],
+)
+def test_final_closes_hypothesis_revision_lifecycle(tmp_path, consumer, message):
+    source = _source(sample_count=1, packet_samples=1)
+    writer, _, _ = _writer(tmp_path, source, consumer, run_id=type(consumer).__name__)
+
+    with pytest.raises(ContractValidationError, match=message):
+        DeterministicReplayRuntime(source, consumer, writer).run()
+
+
+def test_recoverable_error_explicitly_allows_later_event(tmp_path):
+    source = _source(sample_count=1, packet_samples=1)
+    consumer = RecoverableThenPartialConsumer()
+    writer, trace_path, _ = _writer(tmp_path, source, consumer)
+
+    DeterministicReplayRuntime(source, consumer, writer).run()
+    output_types = [
+        record["event_type"]
+        for record in _records(trace_path)
+        if record["event_type"] in {"ERROR", "HYPOTHESIS"}
+    ]
+
+    assert output_types == ["ERROR", "HYPOTHESIS"]
+
+
 def test_fatal_error_closes_scope_and_rejects_later_final(tmp_path):
     source = _source(sample_count=1, packet_samples=1)
     consumer = FatalThenFinalConsumer()
@@ -287,6 +352,7 @@ def test_consumer_metadata_is_whitelist_not_full_provenance(tmp_path):
         "sample_rate",
         "num_channels",
         "channel_ids",
+        "sample_format",
     }
     assert "future_segment_list" not in consumer.metadata
     assert "reference" not in consumer.metadata

@@ -1089,7 +1089,8 @@ MISP replay are not R1 tests.
 
 The following checklist quotes the 22 R0 invariants from Issue #4. `DEFINED`
 means this document gives a testable contract. It does not mean that R1–R5
-implementation or server validation has occurred. R0 status remains REVIEW.
+implementation or server validation has occurred. R0 status is PASS; R1
+implementation and server validation remain under review.
 
 | # | Issue #4 invariant | Status | Contract location / failure condition |
 |---:|---|---|---|
@@ -1148,5 +1149,6 @@ R0 does not implement or decide:
 - changes to `src/`, `scripts/`, `configs/`, `tests/`, README, dependencies,
   Whisper V0, or the MISP baseline.
 
-The next permitted action is **R0 review only**. R1 must not start until this
-document has been reviewed and the R0 gate is explicitly passed.
+The current permitted gate is **R1 review and validation only**. R1 must not be
+treated as externally passed until implementation and server validation are
+explicitly reviewed.

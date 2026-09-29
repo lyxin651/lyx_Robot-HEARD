@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from robot_heard.replay.events import EventType, TraceEvent
+from robot_heard.replay.events import ContractValidationError, EventType, TraceEvent
 from robot_heard.replay.runtime import DeterministicReplayRuntime
 from robot_heard.replay.source import SyntheticSource
 from robot_heard.replay.trace import TraceWriter
@@ -26,6 +26,7 @@ def test_trace_jsonl_and_run_sidecar_are_separate_durable_artifacts(tmp_path):
     assert all(record["schema_version"] == "r1.event.v1" for record in records)
     assert [record["event_index"] for record in records] == list(range(len(records)))
     assert all("event_type" in record and "payload" in record for record in records)
+    assert all(record["wall_offset_sec"] is None for record in records)
     assert provenance["trace_path"] == str(trace_path.resolve())
     assert provenance["consumer_capabilities"]["reports_consumed_position"] is False
 
@@ -79,6 +80,22 @@ def test_trace_writer_rejects_wrong_event_index_and_schema(tmp_path):
     writer.close()
 
 
+def test_trace_writer_requires_complete_r0_provenance(tmp_path):
+    trace_path = (tmp_path / "missing.trace.jsonl").resolve()
+    run_path = (tmp_path / "missing.trace.run.json").resolve()
+
+    with pytest.raises(ContractValidationError, match="missing required fields"):
+        TraceWriter(
+            trace_path,
+            run_path,
+            {
+                "schema_version": "r1.event.v1",
+                "run_id": "missing",
+                "trace_path": str(trace_path),
+            },
+        )
+
+
 def test_deterministic_logical_trace_repeats_for_same_input(tmp_path):
     source_a = _source(sample_count=4, packet_samples=2)
     consumer_a = SnapshotConsumer()
@@ -107,3 +124,4 @@ def test_trace_event_serialization_is_deterministic():
     )
 
     assert event.to_record()["payload"] == {"end_sample": 2, "start_sample": 0}
+    assert event.to_record()["wall_offset_sec"] is None

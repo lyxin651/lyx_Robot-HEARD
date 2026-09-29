@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import math
 from typing import Any, Iterator, Optional, Sequence, Tuple
 
 from robot_heard.replay.events import (
@@ -66,6 +68,65 @@ class SyntheticSource:
             )
         self._samples: Tuple[Tuple[Any, ...], ...] = normalized
         self.packet_samples = packet_samples
+        self._content_sha256 = self._calculate_content_sha256()
+
+    @staticmethod
+    def _canonical_scalar(value: Any, field_name: str) -> bytes:
+        """Encode an R1 scalar without relying on object identity or repr()."""
+
+        if value is None:
+            return b"none\n"
+        if isinstance(value, bool):
+            return b"bool:1\n" if value else b"bool:0\n"
+        if isinstance(value, int):
+            return f"int:{value}\n".encode("ascii")
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ContractValidationError(
+                    f"{field_name} must be a finite float for deterministic hashing"
+                )
+            return f"float:{value.hex()}\n".encode("ascii")
+        if isinstance(value, str):
+            encoded = value.encode("utf-8")
+            return b"str:" + str(len(encoded)).encode("ascii") + b":" + encoded + b"\n"
+        if isinstance(value, bytes):
+            return b"bytes:" + str(len(value)).encode("ascii") + b":" + value + b"\n"
+        raise ContractValidationError(
+            f"{field_name} has unsupported type {type(value).__name__}; "
+            "synthetic source hashing only accepts deterministic scalar values"
+        )
+
+    def _update_hash_field(self, digest: "hashlib._Hash", label: str, value: Any) -> None:
+        encoded = self._canonical_scalar(value, label)
+        digest.update(label.encode("ascii"))
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+
+    def _calculate_content_sha256(self) -> str:
+        """Hash source content and packet/config identity canonically."""
+
+        digest = hashlib.sha256()
+        digest.update(b"robot-heard.synthetic-source.v1\n")
+        self._update_hash_field(digest, "stream_id", self._metadata.stream_id)
+        self._update_hash_field(digest, "sample_rate", self._metadata.sample_rate)
+        self._update_hash_field(digest, "packet_samples", self.packet_samples)
+        self._update_hash_field(digest, "sample_format", self._metadata.sample_format)
+        self._update_hash_field(digest, "channel_layout", self._metadata.channel_layout)
+        self._update_hash_field(digest, "channel_count", len(self._samples))
+        for channel_index, channel_id in enumerate(self._metadata.channel_ids):
+            self._update_hash_field(digest, f"channel_id[{channel_index}]", channel_id)
+            self._update_hash_field(
+                digest,
+                f"channel_length[{channel_index}]",
+                len(self._samples[channel_index]),
+            )
+            for sample_index, sample in enumerate(self._samples[channel_index]):
+                self._update_hash_field(
+                    digest,
+                    f"sample[{channel_index},{sample_index}]",
+                    sample,
+                )
+        return digest.hexdigest()
 
     @property
     def metadata(self) -> StreamMetadata:
@@ -79,10 +140,19 @@ class SyntheticSource:
     def num_channels(self) -> int:
         return len(self._samples)
 
+    @property
+    def content_sha256(self) -> str:
+        """Return the deterministic identity of source content and config."""
+
+        return self._content_sha256
+
     def identity(self) -> str:
         """Return a stable synthetic source identity without filesystem access."""
 
-        return f"synthetic:{self._metadata.stream_id}:{self.total_samples}"
+        return (
+            f"synthetic:{self._metadata.stream_id}:{self.total_samples}:"
+            f"sha256:{self.content_sha256}"
+        )
 
     def chunks(self) -> Iterator[AudioChunk]:
         """Yield adjacent half-open packets using only integer boundaries."""

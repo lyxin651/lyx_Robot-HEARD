@@ -26,15 +26,23 @@ class TraceWriter:
         "run_id",
         "replay_mode",
         "source_identity",
+        "source_sha256",
         "source_sample_rate",
         "channel_ids",
         "packet_samples",
         "queue_policy",
+        "timeline_authority",
         "consumer_identity",
+        "consumer_config",
         "consumer_capabilities",
+        "code_commit",
         "oracle_condition",
+        "warmup_load_policy",
         "clock_policy",
+        "clock_origin",
+        "metric_window",
         "trace_path",
+        "device_provenance",
     )
 
     def __init__(
@@ -66,6 +74,14 @@ class TraceWriter:
         if missing:
             raise ContractValidationError(
                 "run provenance missing required fields: " + ", ".join(missing)
+            )
+        null_fields = [
+            field for field in self.REQUIRED_PROVENANCE_FIELDS if provenance[field] is None
+        ]
+        if null_fields:
+            raise ContractValidationError(
+                "run provenance required fields cannot be null: "
+                + ", ".join(null_fields)
             )
         effective_schema_version = schema_version or provenance["schema_version"]
         if not isinstance(effective_schema_version, str) or not effective_schema_version:

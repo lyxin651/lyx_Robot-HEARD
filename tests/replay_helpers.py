@@ -135,6 +135,153 @@ class EndpointThenFinalConsumer(StreamingConsumer):
         return ConsumerCapabilities(supports_endpoint=True)
 
 
+class FinalThenEndpointConsumer(StreamingConsumer):
+    def __init__(self) -> None:
+        self.stream_id = None
+
+    def start(self, metadata: StreamMetadata) -> None:
+        self.stream_id = metadata.stream_id
+
+    def consume(self, chunk: AudioChunk) -> Sequence[OutputEvent]:
+        return (
+            HypothesisEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-final-endpoint",
+                event_id="final-0",
+                revision_index=0,
+                text="done",
+                kind=HypothesisKind.FINAL,
+            ),
+            EndpointEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-final-endpoint",
+                event_id="endpoint-0",
+            ),
+        )
+
+    def finish(self) -> Sequence[OutputEvent]:
+        return ()
+
+    def reset(self) -> None:
+        self.stream_id = None
+
+    def capabilities(self) -> ConsumerCapabilities:
+        return ConsumerCapabilities(supports_endpoint=True)
+
+
+class FinalThenPartialConsumer(StreamingConsumer):
+    def __init__(self) -> None:
+        self.stream_id = None
+
+    def start(self, metadata: StreamMetadata) -> None:
+        self.stream_id = metadata.stream_id
+
+    def consume(self, chunk: AudioChunk) -> Sequence[OutputEvent]:
+        return (
+            HypothesisEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-final",
+                event_id="final-0",
+                revision_index=0,
+                text="done",
+                kind=HypothesisKind.FINAL,
+            ),
+            HypothesisEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-final",
+                event_id="partial-after-final",
+                revision_index=1,
+                text="changed",
+                kind=HypothesisKind.PARTIAL,
+                replaces_event_id="final-0",
+            ),
+        )
+
+    def finish(self) -> Sequence[OutputEvent]:
+        return ()
+
+    def reset(self) -> None:
+        self.stream_id = None
+
+    def capabilities(self) -> ConsumerCapabilities:
+        return ConsumerCapabilities(supports_partial=True, supports_revision=True)
+
+
+class FinalThenSecondFinalConsumer(StreamingConsumer):
+    def __init__(self) -> None:
+        self.stream_id = None
+
+    def start(self, metadata: StreamMetadata) -> None:
+        self.stream_id = metadata.stream_id
+
+    def consume(self, chunk: AudioChunk) -> Sequence[OutputEvent]:
+        return (
+            HypothesisEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-final",
+                event_id="final-0",
+                revision_index=0,
+                text="done",
+                kind=HypothesisKind.FINAL,
+            ),
+            HypothesisEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-final",
+                event_id="final-1",
+                revision_index=1,
+                text="changed",
+                kind=HypothesisKind.FINAL,
+                replaces_event_id="final-0",
+            ),
+        )
+
+    def finish(self) -> Sequence[OutputEvent]:
+        return ()
+
+    def reset(self) -> None:
+        self.stream_id = None
+
+    def capabilities(self) -> ConsumerCapabilities:
+        return ConsumerCapabilities(supports_revision=True)
+
+
+class RecoverableThenPartialConsumer(StreamingConsumer):
+    def __init__(self) -> None:
+        self.stream_id = None
+
+    def start(self, metadata: StreamMetadata) -> None:
+        self.stream_id = metadata.stream_id
+
+    def consume(self, chunk: AudioChunk) -> Sequence[OutputEvent]:
+        return (
+            ErrorEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-recoverable",
+                event_id="recoverable-0",
+                message="synthetic recoverable error",
+                fatal=False,
+                recoverable=True,
+            ),
+            HypothesisEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-recoverable",
+                event_id="partial-after-recoverable",
+                revision_index=0,
+                text="recovered",
+                kind=HypothesisKind.PARTIAL,
+            ),
+        )
+
+    def finish(self) -> Sequence[OutputEvent]:
+        return ()
+
+    def reset(self) -> None:
+        self.stream_id = None
+
+    def capabilities(self) -> ConsumerCapabilities:
+        return ConsumerCapabilities(supports_partial=True)
+
+
 class FatalThenFinalConsumer(StreamingConsumer):
     def __init__(self) -> None:
         self.stream_id = None

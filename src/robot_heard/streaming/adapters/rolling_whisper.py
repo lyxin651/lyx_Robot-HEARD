@@ -180,6 +180,18 @@ class RollingWhisperConsumer(StreamingConsumer):
             raise RollingWhisperError(f"scope end precedes scope start: {release.segment_id}")
         state.end = release
 
+    def on_oracle_release(self, release: object) -> None:
+        """Accept exactly one already-released boundary from the runtime."""
+
+        if isinstance(release, ScopeStartRelease):
+            self.on_scope_start_release(release)
+        elif isinstance(release, ScopeEndRelease):
+            self.on_scope_end_release(release)
+        else:
+            raise RollingWhisperError(
+                f"rolling adapter received unsupported oracle release: {type(release).__name__}"
+            )
+
     def _wall_offset(self, absolute_time: float) -> float:
         if self._origin is None:
             raise RollingWhisperError("runtime wall origin is not established")

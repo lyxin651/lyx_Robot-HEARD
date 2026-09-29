@@ -267,9 +267,13 @@ class PacedReplayRuntime:
                         wall_time=scheduled_time,
                         wall_offset_sec=scheduled_offset,
                     )
-                    start_hook = getattr(self.consumer, "on_scope_start_release", None)
-                    if start_hook is not None:
-                        start_hook(release)
+                    release_hook = getattr(self.consumer, "on_oracle_release", None)
+                    if release_hook is not None:
+                        release_hook(release)
+                    else:
+                        start_hook = getattr(self.consumer, "on_scope_start_release", None)
+                        if start_hook is not None:
+                            start_hook(release)
                 elif isinstance(release, ScopeEndRelease):
                     self._append_trace(
                         EventType.ORACLE_METADATA_RELEASE,
@@ -288,9 +292,13 @@ class PacedReplayRuntime:
                         wall_time=scheduled_time,
                         wall_offset_sec=scheduled_offset,
                     )
-                    end_hook = getattr(self.consumer, "on_scope_end_release", None)
-                    if end_hook is not None:
-                        end_hook(release)
+                    release_hook = getattr(self.consumer, "on_oracle_release", None)
+                    if release_hook is not None:
+                        release_hook(release)
+                    else:
+                        end_hook = getattr(self.consumer, "on_scope_end_release", None)
+                        if end_hook is not None:
+                            end_hook(release)
                 else:  # pragma: no cover - gate protocol is closed over these records.
                     raise ContractValidationError(
                         f"unsupported oracle release type: {type(release).__name__}"

@@ -7,9 +7,8 @@ interval.  References, speakers, and future rows never cross this boundary.
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Iterable, Optional, Protocol, Sequence, Tuple
+from typing import Iterable, Optional, Protocol, Tuple
 
 from robot_heard.replay.events import ContractValidationError
 
@@ -79,9 +78,6 @@ class OracleReleaseGate(Protocol):
     ) -> Tuple[OracleRelease, ...]:
         ...
 
-    def poll_released(self) -> Tuple[OracleSegmentDescriptor, ...]:
-        ...
-
     @property
     def remaining_count(self) -> int:
         ...
@@ -90,9 +86,10 @@ class OracleReleaseGate(Protocol):
 class Stage2OracleReleaseGate:
     """Release Stage-2 intervals only after their end sample is available.
 
-    The complete timeline is evaluator/runtime-owned.  ``poll_released`` is
-    the only consumer-facing access path and returns descriptor-only values.
-    Rows are sorted by end sample, with segment ID as deterministic tie-break.
+    The complete timeline is evaluator/runtime-owned.  ``on_source_available``
+    returns descriptor-only release evidence to the runtime, which may forward
+    individual releases to a consumer.  Rows are sorted by end sample, with
+    segment ID as deterministic tie-break.
     """
 
     def __init__(
@@ -126,7 +123,6 @@ class Stage2OracleReleaseGate:
         self.condition = condition
         self._packet_duration_sec = packet_duration_sec
         self._next_index = 0
-        self._released: Deque[OracleSegmentDescriptor] = deque()
 
     @property
     def release_count(self) -> int:
@@ -175,12 +171,5 @@ class Stage2OracleReleaseGate:
                 condition=self.condition,
             )
             releases.append(release)
-            self._released.append(descriptor)
             self._next_index += 1
         return tuple(releases)
-
-    def poll_released(self) -> Tuple[OracleSegmentDescriptor, ...]:
-        values = tuple(self._released)
-        self._released.clear()
-        return values
-

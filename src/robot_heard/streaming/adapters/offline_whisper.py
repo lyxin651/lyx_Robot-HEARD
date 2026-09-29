@@ -27,7 +27,7 @@ from robot_heard.replay.events import (
     StreamMetadata,
     TraceEvent,
 )
-from robot_heard.replay.oracle import OracleRelease, OracleReleaseGate, OracleSegmentDescriptor
+from robot_heard.replay.oracle import OracleRelease, OracleSegmentDescriptor
 from robot_heard.streaming.base import StreamingConsumer
 
 
@@ -49,7 +49,6 @@ class OfflineWhisperReferenceConsumer(StreamingConsumer):
     def __init__(
         self,
         backend: ASRBackend,
-        oracle_gate: OracleReleaseGate,
         *,
         materialized_dir: Path,
         spool_path: Path,
@@ -77,7 +76,6 @@ class OfflineWhisperReferenceConsumer(StreamingConsumer):
         if not isinstance(selected_channel_id, str) or not selected_channel_id.strip():
             raise OfflineWhisperReferenceError("selected_channel_id must be non-empty")
         self.backend = backend
-        self._oracle_gate = oracle_gate
         self.materialized_dir = materialized_dir.resolve()
         self.spool_path = spool_path.resolve()
         self.segment_evidence_path = segment_evidence_path.resolve()
@@ -151,6 +149,8 @@ class OfflineWhisperReferenceConsumer(StreamingConsumer):
         if segment_id in self._release_evidence:
             raise OfflineWhisperReferenceError(f"duplicate oracle release: {segment_id}")
         self._release_evidence[segment_id] = release
+        self._pending.append(release.descriptor)
+        self._pending.sort(key=lambda descriptor: (descriptor.end_sample, descriptor.segment_id))
 
     def _wall_offset(self, absolute_time: float) -> float:
         if self._origin is None:
@@ -199,7 +199,6 @@ class OfflineWhisperReferenceConsumer(StreamingConsumer):
         self._spool.seek(chunk.start_sample * 4)
         self._spool.write(self._pack_pcm32(chunk.samples[channel_index]))
         self._received_through_sample = chunk.end_sample
-        self._pending.extend(self._oracle_gate.poll_released())
         self._pending.sort(key=lambda descriptor: (descriptor.end_sample, descriptor.segment_id))
         outputs: List[OutputEvent] = []
         still_pending = []
@@ -319,9 +318,8 @@ class OfflineWhisperReferenceConsumer(StreamingConsumer):
     def finish(self) -> Sequence[OutputEvent]:
         if self._metadata is None or self._spool is None:
             raise OfflineWhisperReferenceError("finish called before start")
-        self._pending.extend(self._oracle_gate.poll_released())
-        if self._pending or self._oracle_gate.remaining_count:
-            raise OfflineWhisperReferenceError("source ended with unreleased or unprocessed segments")
+        if self._pending:
+            raise OfflineWhisperReferenceError("source ended with unprocessed released segments")
         if len(self._processed) != len(self._evidence):
             raise OfflineWhisperReferenceError("segment processing evidence is incomplete")
         self._spool.flush()
@@ -351,4 +349,3 @@ class OfflineWhisperReferenceConsumer(StreamingConsumer):
         self._evidence.clear()
         self._processed.clear()
         self._finished = False
-

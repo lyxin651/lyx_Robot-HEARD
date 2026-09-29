@@ -146,14 +146,21 @@ class PacedReplayRuntime:
         payload: dict,
         wall_time: float,
         sequence_id: Optional[int] = None,
+        wall_offset_sec: Optional[float] = None,
     ) -> TraceEvent:
-        wall_offset = self._wall_offset(wall_time)
+        wall_offset = self._wall_offset(wall_time) if wall_offset_sec is None else wall_offset_sec
+        if wall_offset < 0:
+            raise ContractValidationError("trace wall_offset_sec cannot be negative")
         if wall_offset + 1e-12 < self._last_wall_offset:
             raise ContractValidationError(
                 "compute-aware trace wall_offset_sec must be monotonic: "
                 f"{wall_offset} < {self._last_wall_offset}"
             )
-        self._last_wall_offset = max(self._last_wall_offset, wall_offset)
+        # Host-clock cancellation can make an immediate observation a few
+        # ulps below an exact scheduled sample offset.  Preserve the R0
+        # non-decreasing trace invariant without changing genuine regressions.
+        wall_offset = max(self._last_wall_offset, wall_offset)
+        self._last_wall_offset = wall_offset
         event = TraceEvent(
             schema_version=self.trace_writer.schema_version,
             event_index=len(self._trace_events),
@@ -189,7 +196,9 @@ class PacedReplayRuntime:
             raise ContractValidationError("source yielded a packet after its final chunk")
         self._available_through_sample = chunk.end_sample
         scheduled_time = self._scheduled_wall_time(chunk.end_sample)
-        scheduled_offset = self._wall_offset(scheduled_time)
+        # Integer sample position is the authority.  Deriving this offset
+        # directly avoids cancellation error from (origin + E/Fs) - origin.
+        scheduled_offset = chunk.end_sample / self.source.metadata.sample_rate
         queue.append(chunk)
         self._append_trace(
             EventType.SOURCE_AVAILABLE,
@@ -203,6 +212,7 @@ class PacedReplayRuntime:
             },
             wall_time=scheduled_time,
             sequence_id=chunk.sequence_id,
+            wall_offset_sec=scheduled_offset,
         )
         if self.oracle_gate is not None:
             releases = self.oracle_gate.on_source_available(
@@ -225,6 +235,7 @@ class PacedReplayRuntime:
                         "oracle_condition": release.condition,
                     },
                     wall_time=scheduled_time,
+                    wall_offset_sec=scheduled_offset,
                 )
                 release_hook = getattr(self.consumer, "on_oracle_release", None)
                 if release_hook is not None:
@@ -246,6 +257,7 @@ class PacedReplayRuntime:
                 },
                 wall_time=scheduled_time,
                 sequence_id=chunk.sequence_id,
+                wall_offset_sec=scheduled_offset,
             )
 
     def _catch_up(

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -64,11 +65,20 @@ def _git_head() -> str:
 
 
 def _gpu_provenance() -> Mapping[str, Any]:
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    selected = [item.strip() for item in visible.split(",") if item.strip()]
+    if len(selected) != 1 or not selected[0].isdigit():
+        raise RuntimeError(
+            "R4 requires CUDA_VISIBLE_DEVICES to select exactly one physical GPU index"
+        )
+    physical_index = selected[0]
     try:
         completed = subprocess.run(
             [
                 "nvidia-smi",
-                "--query-gpu=index,name,driver_version,compute_mode,memory.used,memory.free",
+                "-i",
+                physical_index,
+                "--query-gpu=index,uuid,name,driver_version,compute_mode,memory.total,memory.used,memory.free",
                 "--format=csv,noheader",
             ],
             check=True,
@@ -77,7 +87,35 @@ def _gpu_provenance() -> Mapping[str, Any]:
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError("nvidia-smi GPU provenance query failed") from exc
-    return {"nvidia_smi": completed.stdout.strip(), "visible_device": "CUDA_VISIBLE_DEVICES=0"}
+    fields = [item.strip() for item in completed.stdout.strip().split(",")]
+    if len(fields) != 8:
+        raise RuntimeError("nvidia-smi returned unexpected selected-GPU provenance")
+    if fields[4].lower() == "prohibited":
+        raise RuntimeError(f"selected GPU {physical_index} is in Compute Mode Prohibited")
+    try:
+        import torch
+
+        if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
+            raise RuntimeError("selected CUDA device is not uniquely visible to torch")
+        local_index = torch.cuda.current_device()
+        if local_index != 0:
+            raise RuntimeError("the selected physical GPU must map to local CUDA device 0")
+        torch_name = torch.cuda.get_device_name(0)
+    except ImportError as exc:
+        raise RuntimeError("torch is required for R4 GPU provenance") from exc
+    return {
+        "visible_device": f"CUDA_VISIBLE_DEVICES={physical_index}",
+        "physical_index": fields[0],
+        "uuid": fields[1],
+        "name": fields[2],
+        "driver_version": fields[3],
+        "compute_mode": fields[4],
+        "memory_total": fields[5],
+        "memory_used": fields[6],
+        "memory_free": fields[7],
+        "torch_local_device_index": local_index,
+        "torch_device_name": torch_name,
+    }
 
 
 def _load_config(path: Path) -> Dict[str, Any]:
@@ -208,7 +246,6 @@ def run(args: argparse.Namespace) -> Mapping[str, Any]:
     output_root.mkdir(parents=True)
     consumer = OfflineWhisperReferenceConsumer(
         backend,
-        gate,
         materialized_dir=materialized_dir,
         spool_path=spool_path,
         segment_evidence_path=segment_evidence_path,

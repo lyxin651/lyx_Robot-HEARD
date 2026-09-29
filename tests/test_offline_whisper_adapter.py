@@ -1,4 +1,5 @@
 import json
+import inspect
 import wave
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 
 from robot_heard.asr.base import ASRBackend, ASRResult
 from robot_heard.replay.clock import FakeWallClock
+from robot_heard.replay.events import ContractValidationError
 from robot_heard.replay.oracle import Stage2OracleReleaseGate
 from robot_heard.replay.paced_runtime import PacedReplayRuntime
 from robot_heard.replay.source import SyntheticSource
@@ -94,12 +96,14 @@ def test_raw_ch0_adapter_materializes_exact_arrived_ranges_and_final_only(tmp_pa
     clock = FakeWallClock()
     consumer = OfflineWhisperReferenceConsumer(
         backend,
-        gate,
         materialized_dir=tmp_path / "materialized",
         spool_path=tmp_path / "audio.pcm",
         segment_evidence_path=tmp_path / "segments.jsonl",
         wall_clock=clock,
     )
+    assert "oracle_gate" not in inspect.signature(OfflineWhisperReferenceConsumer).parameters
+    assert not hasattr(consumer, "_oracle_gate")
+    assert not hasattr(consumer, "remaining_count")
     writer, trace_path, _ = _writer(tmp_path, source, consumer)
     result = PacedReplayRuntime(
         source, consumer, writer, wall_clock=clock, oracle_gate=gate
@@ -144,7 +148,6 @@ def test_r4_adapter_does_not_decode_until_released_audio_has_arrived(tmp_path):
     backend = FakeASRBackend()
     consumer = OfflineWhisperReferenceConsumer(
         backend,
-        gate,
         materialized_dir=tmp_path / "materialized",
         spool_path=tmp_path / "audio.pcm",
         segment_evidence_path=tmp_path / "segments.jsonl",
@@ -159,3 +162,60 @@ def test_r4_adapter_does_not_decode_until_released_audio_has_arrived(tmp_path):
     assert backend.paths == []
     assert len(consumer.consume(next(chunks))) == 1
     assert len(backend.paths) == 1
+
+
+def test_consumer_pending_state_contains_only_released_descriptors(tmp_path):
+    source = _source()
+    gate_a = Stage2OracleReleaseGate(
+        [type("Row", (), {"segment_id": "same", "start_sample": 0, "end_sample": 320})()],
+        sample_rate=16000,
+    )
+    gate_b = Stage2OracleReleaseGate(
+        [type("Row", (), {"segment_id": "same", "start_sample": 0, "end_sample": 320})()],
+        sample_rate=16000,
+    )
+    consumer_a = OfflineWhisperReferenceConsumer(
+        FakeASRBackend(),
+        materialized_dir=tmp_path / "a-materialized",
+        spool_path=tmp_path / "a.pcm",
+        segment_evidence_path=tmp_path / "a.jsonl",
+    )
+    consumer_b = OfflineWhisperReferenceConsumer(
+        FakeASRBackend(),
+        materialized_dir=tmp_path / "b-materialized",
+        spool_path=tmp_path / "b.pcm",
+        segment_evidence_path=tmp_path / "b.jsonl",
+    )
+    release_a = gate_a.on_source_available(320, 0.02)[0]
+    release_b = gate_b.on_source_available(320, 0.02)[0]
+    consumer_a.on_oracle_release(release_a)
+    consumer_b.on_oracle_release(release_b)
+    assert consumer_a._pending == consumer_b._pending
+    assert not hasattr(consumer_a, "_oracle_gate")
+    assert not any("future" in key or "reference" in key for key in vars(consumer_a))
+    with pytest.raises(OfflineWhisperReferenceError, match="duplicate oracle release"):
+        consumer_a.on_oracle_release(release_a)
+
+
+def test_runtime_validates_unreleased_oracle_rows_before_consumer_finish(tmp_path):
+    source = _source()
+    gate = Stage2OracleReleaseGate(
+        [type("Row", (), {"segment_id": "too-late", "start_sample": 0, "end_sample": 1000})()],
+        sample_rate=16000,
+        packet_duration_sec=0.02,
+    )
+    consumer = OfflineWhisperReferenceConsumer(
+        FakeASRBackend(),
+        materialized_dir=tmp_path / "materialized",
+        spool_path=tmp_path / "audio.pcm",
+        segment_evidence_path=tmp_path / "segments.jsonl",
+        wall_clock=FakeWallClock(),
+    )
+    writer, _, _ = _writer(tmp_path, source, consumer)
+    try:
+        with pytest.raises(ContractValidationError, match="unreleased oracle segments"):
+            PacedReplayRuntime(
+                source, consumer, writer, wall_clock=FakeWallClock(), oracle_gate=gate
+            ).run()
+    finally:
+        consumer.reset()

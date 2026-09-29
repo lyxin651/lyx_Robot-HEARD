@@ -24,13 +24,12 @@ def test_stage2_gate_releases_only_at_first_available_packet_and_is_descriptor_o
     assert [release.descriptor.segment_id for release in releases] == ["seg-b", "seg-a"]
     assert releases[0].segment_end_available_wall_offset_sec == pytest.approx(0.03125)
     assert releases[0].oracle_release_quantization_sec == pytest.approx(0.00875)
-    descriptors = gate.poll_released()
+    descriptors = [release.descriptor for release in releases]
     assert descriptors[0].end_sample == 500
     assert not hasattr(descriptors[0], "reference")
     assert not hasattr(descriptors[0], "speaker_id")
     assert gate.release_count == 2
     assert gate.remaining_count == 0
-    assert gate.poll_released() == ()
 
 
 def test_stage2_gate_rejects_duplicate_ids_and_large_quantization():
@@ -64,4 +63,3 @@ def test_future_timeline_perturbation_cannot_change_prefix_releases():
     first_a = prefix_a.on_source_available(10, 0.01)
     first_b = prefix_b.on_source_available(10, 0.01)
     assert [item.descriptor for item in first_a] == [item.descriptor for item in first_b]
-    assert prefix_a.poll_released() == prefix_b.poll_released()

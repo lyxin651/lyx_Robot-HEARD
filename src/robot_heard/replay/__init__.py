@@ -1,6 +1,12 @@
 """Deterministic synthetic replay contracts and runtime."""
 
-from robot_heard.replay.clock import FakeClock, LogicalClock
+from robot_heard.replay.clock import (
+    FakeClock,
+    FakeWallClock,
+    LogicalClock,
+    MonotonicWallClock,
+    WallClock,
+)
 from robot_heard.replay.events import (
     AudioChunk,
     ConsumerCapabilities,
@@ -18,6 +24,8 @@ from robot_heard.replay.runtime import (
     DeterministicReplayRuntime,
     ReplayRunResult,
 )
+from robot_heard.replay.paced_runtime import PacedReplayRunResult, PacedReplayRuntime
+from robot_heard.replay.metrics import MetricsError, compute_paced_metrics, write_metrics_json
 from robot_heard.replay.source import ReplaySource, SyntheticSource
 from robot_heard.replay.trace import TraceWriter
 from robot_heard.replay.wav_source import MultiChannelPcmWavSource, WavSourceError
@@ -31,9 +39,14 @@ __all__ = [
     "ErrorEvent",
     "EventType",
     "FakeClock",
+    "FakeWallClock",
     "HypothesisEvent",
     "HypothesisKind",
     "LogicalClock",
+    "MonotonicWallClock",
+    "WallClock",
+    "PacedReplayRuntime",
+    "PacedReplayRunResult",
     "ReplayMode",
     "ReplayRunResult",
     "ReplaySource",
@@ -43,4 +56,7 @@ __all__ = [
     "TraceWriter",
     "MultiChannelPcmWavSource",
     "WavSourceError",
+    "MetricsError",
+    "compute_paced_metrics",
+    "write_metrics_json",
 ]

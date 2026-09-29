@@ -141,9 +141,16 @@ available while remaining queued and therefore not delivered.
 
 ### C. `consumed_through_sample`
 
-The exclusive highest sample that the adapter declares incorporated into its
-hypothesis state. This is consumer metadata, not proof that future audio was
-not visible. The runtime must enforce visibility independently.
+The optional, nullable exclusive highest sample that the adapter declares
+incorporated into its hypothesis state. This is consumer metadata, not proof
+that future audio was not visible. The runtime must enforce visibility
+independently.
+
+An adapter may report this position only when it can define and support a
+trustworthy relation between the value and its actual model state. The
+capability is `reports_consumed_position`. When that capability is false, the
+normalized event value is `null` and the runtime must not substitute
+`delivered_through_sample`.
 
 ### D. Output observed time
 
@@ -153,11 +160,20 @@ delivered positions observed when the output arrived.
 
 ### Required invariant
 
-At every observation point:
+When a valid consumed position is present:
 
 ```text
 consumed_through_sample <= delivered_through_sample <= available_through_sample
 ```
+
+When consumed position is unavailable:
+
+```text
+delivered_through_sample <= available_through_sample
+```
+
+Consumption-specific metrics are unavailable in the second case unless a
+future contract defines another explicit authority.
 
 The relation between source availability, delivery, consumption, and output
 observation is causal state, not one timestamp.
@@ -359,6 +375,7 @@ or metrics for it.
 | `supports_endpoint` | boolean | Consumer can emit an endpoint belief distinct from finalization. | No ENDPOINT capability is claimed. |
 | `supports_token_timestamps` | boolean | Consumer emits causally valid token-level timing. | Token timing metrics are unavailable. |
 | `supports_word_timestamps` | boolean | Consumer emits causally valid word-level timing. | Word timing metrics are unavailable. |
+| `reports_consumed_position` | boolean | Adapter reports a trustworthy, defined exclusive sample position incorporated into model state. | `consumed_through_sample` is nullable and normalized to `null`; consumption-position metrics and processing lag are unavailable. |
 | `native_streaming` | boolean | Model/decoder natively consumes incremental audio/state rather than an offline wrapper. | Adapter is not labeled native streaming. |
 | `stateful` | boolean | Adapter maintains state across `consume()` calls within one stream. | Each call must be interpreted as stateless unless the adapter contract says otherwise. |
 
@@ -376,22 +393,29 @@ hypothesis event is a complete snapshot, not an append delta.
 |---|---:|---|---|
 | `scope_id` | yes | Adapter, validated by runtime | Identifies the utterance or output scope. It must be stable for the scope. |
 | `event_id` | yes | Runtime | Globally unique within the trace. |
-| `revision_index` | yes for hypothesis | Adapter, validated by runtime | Starts at zero or one according to the declared adapter contract and then increases by exactly one for each replacement in a scope. The base must be recorded. |
+| `revision_index` | yes for PARTIAL/FINAL hypothesis | Adapter, validated by runtime | The first hypothesis snapshot is `0`; every replacement is the immediately previous index plus one. No alternate base is permitted. |
 | `text` | yes for PARTIAL/FINAL | Adapter | Complete current hypothesis text, including unchanged prefix. It is not a delta. |
 | `replaces_event_id` | optional for first snapshot, required for a replacement | Adapter/runtime | Identifies the current snapshot replaced by this event. It must refer to the immediately active non-final snapshot. |
 | `stable_prefix` | optional unless capability is true | Adapter/runtime | Exact prefix of `text`, with the irrevocability rule in Section 17. |
-| `consumed_through_sample` | yes | Adapter declaration, runtime range check | Exclusive sample position incorporated into the hypothesis state. Must not exceed delivered position. |
+| `consumed_through_sample` | optional / nullable | Adapter declaration, runtime range check | Exclusive sample position incorporated into the hypothesis state. It is `null` when `reports_consumed_position = false`; when present it must not exceed delivered position. |
 | runtime observation fields | yes | Runtime | Monotonic observation offset, available position, delivered position, and event index at observation. |
 
 The runtime rejects or marks invalid any event with duplicate event ID, an
 unknown replacement, a non-monotonic revision, text treated as a delta, or a
-consumed position outside the delivered range.
+non-null consumed position outside the delivered range. A missing or null
+consumed position is valid when `reports_consumed_position = false`; it is
+invalid when `reports_consumed_position = true`.
 
 ## 16. Revision Semantics
 
-`revision_index` is monotonic within each `scope_id`. A new PARTIAL replaces
-the previous current snapshot for that scope. A replacement may change any
+The first PARTIAL or FINAL snapshot in each `scope_id` has
+`revision_index = 0`. A new PARTIAL replaces the previous current snapshot for
+that scope and has `revision_index = previous + 1`. A FINAL that supersedes a
+PARTIAL also has `revision_index = previous + 1`. A replacement may change any
 unstable suffix and may also change its length.
+
+The sequence is exactly `0, 1, 2, ...`. A one-based index, a skipped index, a
+duplicate index, or a descending index is invalid.
 
 The replacement relationship is explicit. If a consumer emits a new snapshot
 without a valid `replaces_event_id`, the runtime records the event as invalid
@@ -449,8 +473,43 @@ revision, stable-prefix, native-streaming, or model endpointing capability.
 
 ## 19. Trace Contract
 
-The raw trace is append-only evidence. Derived metrics are separate artifacts
-and must never mutate raw trace records.
+The raw trace is persisted as append-only JSONL evidence. The canonical raw
+trace path is conceptually `trace.jsonl`.
+
+Each JSONL line is exactly one runtime event record. Each record includes a
+`schema_version` field so event schema evolution is explicit. The writer
+appends new lines only. No post-processing step may overwrite, reorder, delete,
+or modify an existing JSONL line.
+
+Run-level provenance is a separate sidecar, conceptually
+`trace.run.json`. It is not mixed into the event stream. The sidecar includes
+at least:
+
+| Field | Required | Meaning |
+|---|---:|---|
+| `schema_version` | yes | Version of the run-sidecar contract. |
+| `run_id` | yes | Unique identity of the replay run. |
+| `replay_mode` | yes | `COMPUTE_UNAWARE` or `COMPUTE_AWARE`. |
+| source identity / SHA | yes | Canonical source identity and hashes. |
+| source sample rate | yes | Samples/second used for all sample positions. |
+| channel IDs | yes | Ordered source channels and layout. |
+| packet configuration | yes | Integer packet width and derived presentation width. |
+| queue policy | yes | Named queue/overload condition. |
+| consumer identity/config | yes | Adapter identity and adapter configuration provenance. |
+| consumer capability declaration | yes | The complete capability set, including `reports_consumed_position`. |
+| `code_commit` | yes | Exact repository commit used for the run. |
+| oracle condition | yes | Metadata visibility and segmentation condition. |
+| warm-up/load policy | yes | Load, warm-up, measured interval, and tail policy. |
+| device provenance | conditional | Device, synchronization, and shared-load information when relevant. |
+| clock policy | yes | Logical, monotonic, and UTC provenance rules. |
+| metric window | yes | Measured sample and wall boundaries. |
+| trace path | yes | Path of the JSONL evidence file. |
+| trace SHA | conditional | Hash of the completed JSONL file when finalized. |
+
+JSONL is the persisted evidence format. Python dataclasses, dictionaries, or
+other in-memory objects are implementation details and are not frozen by R0.
+Derived metrics are separate artifacts and must never be written back into the
+raw JSONL stream.
 
 The trace must cover these event categories:
 
@@ -474,16 +533,18 @@ Every trace record contains:
 
 | Field | Authority | Unit/meaning | Invariant |
 |---|---|---|---|
+| `schema_version` | Runtime | version identifier | Present on every persisted event record; the reader rejects an unsupported version. |
 | `event_index` | Runtime | non-negative integer | Strictly increases by one in append order. |
 | `stream_id` | Runtime | opaque ID | Same for all records in one stream. |
 | logical/sample position | Runtime/source | integer sample position or explicit null for non-audio lifecycle events | Must identify the availability/delivery boundary relevant to the event. |
 | monotonic/wall offset | Runtime | monotonic elapsed time | Used for elapsed metrics; never UTC. |
 | event-specific fields | Event producer, runtime-validated | schema of the event category | Must satisfy the category invariants above. |
 
-The run-level trace provenance records source identity and hashes, sample rate,
-channels and layout, packet size, replay mode, queue policy, timeline
-authority, adapter/model/config identity, code commit, load/warm-up policy,
-device identity when relevant, clock origin, and the exact event sequence.
+The sidecar records source identity and hashes, sample rate, channels and
+layout, packet size, replay mode, queue policy, timeline authority,
+adapter/model/config identity, capability declaration, code commit,
+load/warm-up policy, device identity when relevant, clock origin, metric
+window, and the JSONL trace path/hash.
 
 ## 20. MISP Canonical Source Contract
 
@@ -515,6 +576,19 @@ from a headerless file.
 
 The runtime must not implicitly downmix the eight channels. Channel selection
 or a frontend transformation is an explicit source/frontend condition.
+
+The first R4 reference condition is frozen as:
+
+| Provenance field | Required value |
+|---|---|
+| `source` | `prepared_continuous_8ch` |
+| `frontend_condition` | `raw_ch0` |
+| `selected_channel_id` | `0` |
+| `materialization` | only arrived continuous samples in `[S,E)` |
+
+The source remains the complete continuous eight-channel recording. The
+`raw_ch0` condition is an explicit adapter selection, not a replacement of the
+source by an existing segment artifact.
 
 ## 21. Stage-2 Timeline Authority
 
@@ -568,10 +642,17 @@ R4 executes the following conceptual path:
 continuous replay
   -> source reaches E
   -> oracle gate releases segment_id, S, E
-  -> materialize only arrived [S,E)
+  -> select channel_id = 0 from arrived continuous samples
+  -> materialize [S,E) as explicit mono, 16 kHz Whisper-compatible waveform
   -> existing ASRBackend.transcribe(path)
   -> FINAL-only OutputEvent
 ```
+
+R4 provenance records `source = prepared_continuous_8ch`,
+`frontend_condition = raw_ch0`, `selected_channel_id = 0`, and the exact
+materialization range `[S,E)`. The replay runtime still delivers eight-channel
+`AudioChunk` values. Only the R4 adapter selects channel 0 after the oracle
+gate; the runtime does not downmix or average channels.
 
 R4 is permanently labeled:
 
@@ -579,8 +660,10 @@ R4 is permanently labeled:
 reference**
 
 It must not be labeled native streaming, fully online segmentation, or
-causal endpointing. `raw_ch0` and GSS segment artifacts are not substitute
-continuous replay sources.
+causal endpointing. Existing segment-level `raw_ch0` WAVs and GSS segment
+artifacts are not replay sources. Future beamformed, GSS/block-online, FIVE,
+or neural frontend conditions must use distinct explicit frontend names and
+must not silently replace `raw_ch0`.
 
 The existing `transcribe()` call remains a complete-file call. Model load is
 outside its current `decode_sec`; replay compute metrics must not relabel that
@@ -677,17 +760,26 @@ At a recorded observation point:
 
 ```text
 queue_backlog_samples   = available_through_sample - delivered_through_sample
-processing_lag_samples  = available_through_sample - consumed_through_sample
 queue_backlog_sec        = queue_backlog_samples / Fs
-processing_lag_sec        = processing_lag_samples / Fs
 ```
 
 Queue backlog measures audio available but not yet delivered. Processing lag
-also includes audio already delivered but not yet incorporated into consumer
-state. The two metrics must be reported separately.
+is defined only when `reports_consumed_position = true` and a non-null,
+range-valid consumed position is present:
 
-Both values must be non-negative under the four-position invariant. A negative
-value is a runtime state error, not a valid metric.
+```text
+processing_lag_samples  = available_through_sample - consumed_through_sample
+processing_lag_sec        = processing_lag_samples / Fs
+```
+
+Processing lag also includes audio already delivered but not yet incorporated
+into consumer state. The two metrics must be reported separately.
+
+Queue backlog must be non-negative under the delivery invariant. Processing lag
+is `UNAVAILABLE` when consumed position is null or the capability is false; it
+must not be computed by substituting delivered position. Any negative value
+when the required position is present is a runtime state error, not a valid
+metric.
 
 ## 29. Backlog Statistics
 
@@ -771,9 +863,11 @@ overrun. The source-end and output event IDs are recorded with the metric.
 
 Two latency families are intentionally separate.
 
-**Input-consumption-position latency** reports how far into the input the
-consumer had incorporated when it emitted an output. It uses sample positions
-and is meaningful for algorithmic streaming analysis.
+**CHiME-style input-consumption-position latency** reports how far into the
+input the consumer had incorporated when it emitted an output. It uses sample
+positions and is meaningful for algorithmic streaming analysis only when
+`reports_consumed_position = true` and the event has a valid non-null consumed
+position. Otherwise it is `UNAVAILABLE`.
 
 **Wall-clock end-to-end delay** reports how long elapsed between the relevant
 source availability boundary and runtime observation of the output. It includes
@@ -789,15 +883,21 @@ event contract support them:
 
 | Metric | Definition | Availability condition |
 |---|---|---|
-| TTFT | First observed PARTIAL or FINAL wall time minus measured stream start wall time. | `supports_partial` or a FINAL-only consumer with a first final. |
-| TTFT-stable | First observed hypothesis with a non-empty valid irrevocable `stable_prefix` minus measured stream start wall time. | `supports_stable_prefix = true`; exact-prefix checks pass. |
+| `stream_TTFT` | First observed PARTIAL or FINAL wall time minus measured stream start wall time. | `supports_partial` or a FINAL-only consumer with a first final. This is stream-relative and does not represent utterance onset. |
+| `stream_TTFT-stable` | First observed hypothesis with a non-empty valid irrevocable `stable_prefix` minus measured stream start wall time. | `supports_stable_prefix = true`; exact-prefix checks pass. This is stream-relative. |
+| `scope_TTFT` | First observed PARTIAL or FINAL wall time minus a trusted causal scope-start wall time. | Optional future metric; `scope_start_wall` must have an explicit authority. It is `UNAVAILABLE` when no trusted scope start exists. |
+| `scope_TTFT-stable` | First valid non-empty stable-prefix observation minus a trusted causal scope-start wall time. | Optional future metric; stable-prefix capability and trusted scope start are both required. |
 | TTLT | Final observation wall time minus the declared scope start wall boundary. | One valid FINAL exists. |
 | Revision count | Number of valid replacement PARTIAL events in a scope. | `supports_revision = true`; replacement links valid. |
 | Flicker | Edit distance or equivalent declared difference between consecutive complete snapshots. | At least two valid snapshots; text unit and algorithm recorded. |
 | Stable-prefix growth | Sequence of declared stable-prefix lengths at observation events. | `supports_stable_prefix = true`. |
 
-If the capability is false, the evaluator reports the metric as unavailable,
-not zero. The trace still preserves events that were actually emitted.
+If the capability or trusted timing authority is false, the evaluator reports
+the affected metric as unavailable, not zero. The trace still preserves events
+that were actually emitted. A continuous meeting's measured stream start is
+not an utterance onset. A Stage-2 oracle start is not a fully-online scope
+start and must not be used as one without a named oracle condition and explicit
+metric authority.
 
 ## 35. GPU Timing Policy
 
@@ -849,7 +949,7 @@ At return time:
 ```text
 available_through_sample  = 5120
 delivered_through_sample  = 320
-consumed_through_sample   <= 320
+consumed_through_sample   <= 320 when reported; otherwise null
 ```
 
 Packets P1 through P15 have become fully available during the blocked call.
@@ -893,6 +993,8 @@ This is a planned schema only. R0 does not create YAML or JSON configuration.
 | `source.sample_rate` | positive integer | yes or source-derived with verification | Runtime source | Must match decoded source and timeline conversion. |
 | `source.channel_ids` | ordered list | yes | Runtime source | Must match samples and source files; no implicit downmix. |
 | `source.sha256` | hash map | provenance required | Runtime | Hashes canonical source files before replay. |
+| `consumer.frontend_condition` | enum/string | yes for R4 | Adapter boundary | R4 reference value is `raw_ch0`; other frontend values are distinct named conditions. |
+| `consumer.selected_channel_id` | non-negative integer | required for channel-selecting conditions | Adapter boundary | R4 reference value is `0`; it never authorizes runtime downmix. |
 | `packet_samples` | positive integer | exactly one of samples/ms unless consistent | Runtime | Primary integer packet width. |
 | `packet_ms` | decimal | exactly one of samples/ms unless consistent | Runtime | Derived/config presentation width; must convert exactly to samples at `Fs`. |
 | `replay_mode` | enum | yes | Runtime | `COMPUTE_UNAWARE` or `COMPUTE_AWARE`. |
@@ -906,6 +1008,8 @@ This is a planned schema only. R0 does not create YAML or JSON configuration.
 | `deadline_budget` | non-negative seconds | optional | Runtime/evaluator | Required before deadline miss is computed. |
 | `oracle_condition` | enum/string | yes when segment metadata is used | Runtime/evaluator | Names visibility condition and disclosure rules. |
 | `trace.raw_path` | path | yes | Runtime | Append-only raw trace destination. |
+| `trace.run_provenance_path` | path | yes | Runtime | Separate run-level sidecar, conceptually `trace.run.json`. |
+| `trace.schema_version` | version identifier | yes | Runtime | Version used by persisted JSONL records and sidecar. |
 | `trace.derived_paths` | path map | optional | Evaluator | Derived metrics/results; never overwrite raw trace. |
 | `provenance.code_commit` | commit SHA | yes | Runtime | Exact code commit used for the run. |
 | `provenance.device` | mapping | conditional | Runtime/adapter | Device and shared-load identity when relevant. |
@@ -961,6 +1065,8 @@ The minimum R1/R3/R4 test inventory is:
 - fixed same-time ordering;
 - reset state isolation;
 - PARTIAL snapshot and revision rules;
+- first hypothesis `revision_index = 0`, exact +1 replacement sequence, and
+  first-FINAL-at-zero;
 - stable-prefix exactness and irrevocability;
 - fatal and recoverable error rules;
 - FINAL and `finish()` rules;
@@ -989,11 +1095,11 @@ implementation or server validation has occurred. R0 status remains REVIEW.
 |---:|---|---|---|
 | 1 | Same input/config + deterministic consumer => same logical trace. | DEFINED | Sections 8, 19, 25. Logical event mismatch is a deterministic-trace failure. |
 | 2 | Every normal source sample is released exactly once. | DEFINED | Sections 6, 10. Missing, duplicate, or overlapping normal packet range fails. |
-| 3 | Packet availability, delivery, consumption, and output observation are distinct. | DEFINED | Section 5. Conflated or missing positions fail trace validation. |
-| 4 | `consumed <= delivered <= available`. | DEFINED | Sections 5, 15, 28. Any negative lag or ordering violation fails. |
+| 3 | Packet availability, delivery, consumption, and output observation are distinct. | DEFINED | Sections 5, 15, and 19. Consumption is optional/nullable; absence is recorded, not fabricated. |
+| 4 | `consumed <= delivered <= available`. | DEFINED | Section 5. When consumed is present, `consumed <= delivered <= available`; when absent, `delivered <= available`. |
 | 5 | Same-time event order is fixed. | DEFINED | Section 9 and Section 37. Different ordering fails deterministic scheduler tests. |
 | 6 | Prepared MISP time uses integer sample addressing. | DEFINED | Sections 4, 20, 21. Float accumulation or non-exact conversion fails closed. |
-| 7 | 8ch input is never implicitly downmixed. | DEFINED | Sections 10, 20. Missing explicit channel policy fails source validation. |
+| 7 | 8ch input is never implicitly downmixed. | DEFINED | Sections 10, 20, and 23. R4 explicitly selects `raw_ch0`/channel 0; missing channel policy fails source validation. |
 | 8 | Consumer startup metadata does not silently reveal future annotations/endpoints. | DEFINED | Sections 11, 22, 24. Undeclared disclosure is a causality failure. |
 | 9 | Partial is a full snapshot, not an unspecified delta. | DEFINED | Section 15. Delta-only text fails event validation. |
 | 10 | Revision replacement and stable-prefix rules are explicit. | DEFINED | Sections 16 and 17. Invalid replacement or prefix withdrawal fails. |
@@ -1002,21 +1108,18 @@ implementation or server validation has occurred. R0 status remains REVIEW.
 | 13 | Queue backlog and processing lag are different metrics. | DEFINED | Section 28. A report using one as the other is invalid. |
 | 14 | RTF numerator/denominator/window are explicit. | DEFINED | Sections 26 and 27. Missing phase/window makes RTF unavailable. |
 | 15 | Model load/warm-up/tail are separated. | DEFINED | Section 26. Unlabeled load or tail time fails provenance validation. |
-| 16 | CHiME-style input-position latency and wall E2E delay have different names. | DEFINED | Section 33. Substitution without label fails metric validation. |
+| 16 | CHiME-style input-position latency and wall E2E delay have different names. | DEFINED | Section 33. Position latency requires `reports_consumed_position = true`; substitution without label fails metric validation. |
 | 17 | Causality test constrains actual visible audio/metadata, not just self-reported consumption. | DEFINED | Sections 11, 24, 25. Consumer self-report alone cannot pass. |
 | 18 | R4 precomputed segmentation remains explicitly oracle/pseudo-online. | DEFINED | Sections 22 and 23. Native/fully-online label fails R4 validation. |
 | 19 | Raw trace is append-only; derived metrics do not mutate it. | DEFINED | Section 19. Any derived rewrite fails evidence validation. |
 | 20 | Current offline Whisper V0 contract remains unchanged. | DEFINED | Sections 2 and 23. Replay implementation requiring ASRBackend redesign fails scope review. |
-| 21 | A new ASR adapter does not require replay clock/scheduler changes. | DEFINED | Sections 3, 13, 39. Model-name branch in runtime fails boundary review. |
+| 21 | A new ASR adapter does not require replay clock/scheduler changes. | DEFINED | Sections 3, 13, 23, and 39. R4 channel selection is adapter policy; a model-name branch in runtime fails boundary review. |
 | 22 | R1–R5 schema scope is audio+ASR; R6 extensions require review. | DEFINED | Sections 1, 19, 39, 42. Unreviewed AVDR schema expansion fails R0 scope. |
 
-The remaining R0 review questions are implementation-readiness questions, not
-unfrozen core definitions:
+The remaining questions are future implementation or governance questions, not
+unfrozen R0 core definitions:
 
-- whether the first implementation will expose the conceptual fields as JSONL,
-  in-memory records, or both;
-- which future adapter supplies a trustworthy `consumed_through_sample` value;
-- which real GPU synchronization primitive each future adapter will declare;
+- which exact GPU synchronization primitive each future adapter will declare;
 - whether a later raw-PCM source adapter is needed in addition to the canonical
   prepared source;
 - whether PR base should be retargeted after PR #2 merges.

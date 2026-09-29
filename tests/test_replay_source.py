@@ -48,21 +48,75 @@ def test_synthetic_source_is_repeatable_without_mutating_input():
     assert samples == ([1, 2, 3], [4, 5, 6])
 
 
-def test_synthetic_source_content_hash_is_stable_and_content_sensitive():
+def test_synthetic_source_hash_is_independent_of_packetization_and_stream_label():
     source_a = SyntheticSource(
-        ((1, 2, 3),), sample_rate=1000, packet_samples=2, stream_id="hash"
+        ((1, 2, 3), (4, 5, 6)),
+        sample_rate=1000,
+        packet_samples=1,
+        stream_id="stream-a",
+        channel_ids=("left", "right"),
     )
     source_b = SyntheticSource(
-        ((1, 2, 3),), sample_rate=1000, packet_samples=2, stream_id="hash"
+        ((1, 2, 3), (4, 5, 6)),
+        sample_rate=1000,
+        packet_samples=2,
+        stream_id="stream-a",
+        channel_ids=("left", "right"),
     )
     source_c = SyntheticSource(
-        ((1, 2, 4),), sample_rate=1000, packet_samples=2, stream_id="hash"
+        ((1, 2, 3), (4, 5, 6)),
+        sample_rate=1000,
+        packet_samples=1,
+        stream_id="stream-b",
+        channel_ids=("left", "right"),
     )
 
-    assert source_a.content_sha256 == source_b.content_sha256
+    assert source_a.content_sha256 == source_b.content_sha256 == source_c.content_sha256
     assert source_a.identity() == source_b.identity()
-    assert source_a.content_sha256 != source_c.content_sha256
     assert source_a.identity() != source_c.identity()
+
+
+def test_synthetic_source_hash_is_sensitive_to_content_and_source_semantics():
+    source = SyntheticSource(
+        ((1, 2, 3), (4, 5, 6)),
+        sample_rate=1000,
+        packet_samples=1,
+        stream_id="stream-a",
+        channel_ids=("left", "right"),
+    )
+    different_content = SyntheticSource(
+        ((1, 2, 4), (4, 5, 6)),
+        sample_rate=1000,
+        packet_samples=1,
+        stream_id="stream-a",
+        channel_ids=("left", "right"),
+    )
+    different_rate = SyntheticSource(
+        ((1, 2, 3), (4, 5, 6)),
+        sample_rate=2000,
+        packet_samples=1,
+        stream_id="stream-a",
+        channel_ids=("left", "right"),
+    )
+    different_channel_order = SyntheticSource(
+        ((1, 2, 3), (4, 5, 6)),
+        sample_rate=1000,
+        packet_samples=1,
+        stream_id="stream-a",
+        channel_ids=("right", "left"),
+    )
+    repeated_construction = SyntheticSource(
+        ((1, 2, 3), (4, 5, 6)),
+        sample_rate=1000,
+        packet_samples=1,
+        stream_id="stream-a",
+        channel_ids=("left", "right"),
+    )
+
+    assert source.content_sha256 != different_content.content_sha256
+    assert source.content_sha256 != different_rate.content_sha256
+    assert source.content_sha256 != different_channel_order.content_sha256
+    assert source.content_sha256 == repeated_construction.content_sha256
 
 
 def test_synthetic_source_rejects_unhashable_sample_type():

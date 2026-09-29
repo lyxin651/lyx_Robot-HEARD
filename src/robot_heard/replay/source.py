@@ -103,13 +103,16 @@ class SyntheticSource:
         digest.update(encoded)
 
     def _calculate_content_sha256(self) -> str:
-        """Hash source content and packet/config identity canonically."""
+        """Hash source content and source semantics canonically.
+
+        ``packet_samples`` is replay configuration and ``stream_id`` is a
+        runtime label.  Both remain available through the source/provenance
+        objects, but neither is part of the source authority hash.
+        """
 
         digest = hashlib.sha256()
         digest.update(b"robot-heard.synthetic-source.v1\n")
-        self._update_hash_field(digest, "stream_id", self._metadata.stream_id)
         self._update_hash_field(digest, "sample_rate", self._metadata.sample_rate)
-        self._update_hash_field(digest, "packet_samples", self.packet_samples)
         self._update_hash_field(digest, "sample_format", self._metadata.sample_format)
         self._update_hash_field(digest, "channel_layout", self._metadata.channel_layout)
         self._update_hash_field(digest, "channel_count", len(self._samples))
@@ -147,7 +150,12 @@ class SyntheticSource:
         return self._content_sha256
 
     def identity(self) -> str:
-        """Return a stable synthetic source identity without filesystem access."""
+        """Return a readable identity while keeping its source hash semantic.
+
+        The stream label is retained for human-readable runtime distinction;
+        ``content_sha256`` remains independent of both this label and packet
+        configuration.
+        """
 
         return (
             f"synthetic:{self._metadata.stream_id}:{self.total_samples}:"

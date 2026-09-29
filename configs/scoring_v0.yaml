@@ -1,0 +1,2 @@
+# Local V0 diagnostic scoring policy. Official MISP scoring remains authoritative when released.
+normalization_policy: v0_nfkc_casefold_strip_space_punct

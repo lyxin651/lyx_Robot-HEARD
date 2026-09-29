@@ -25,10 +25,21 @@ from robot_heard.replay.runtime import (
     ReplayRunResult,
 )
 from robot_heard.replay.paced_runtime import PacedReplayRunResult, PacedReplayRuntime
-from robot_heard.replay.metrics import MetricsError, compute_paced_metrics, write_metrics_json
+from robot_heard.replay.metrics import (
+    MetricsError,
+    compute_paced_metrics,
+    compute_r4_metrics,
+    write_metrics_json,
+)
 from robot_heard.replay.source import ReplaySource, SyntheticSource
 from robot_heard.replay.trace import TraceDurabilityPolicy, TraceWriter
 from robot_heard.replay.wav_source import MultiChannelPcmWavSource, WavSourceError
+from robot_heard.replay.oracle import (
+    OracleRelease,
+    OracleReleaseGate,
+    OracleSegmentDescriptor,
+    Stage2OracleReleaseGate,
+)
 
 __all__ = [
     "AudioChunk",
@@ -57,7 +68,12 @@ __all__ = [
     "TraceWriter",
     "MultiChannelPcmWavSource",
     "WavSourceError",
+    "OracleRelease",
+    "OracleReleaseGate",
+    "OracleSegmentDescriptor",
+    "Stage2OracleReleaseGate",
     "MetricsError",
     "compute_paced_metrics",
+    "compute_r4_metrics",
     "write_metrics_json",
 ]

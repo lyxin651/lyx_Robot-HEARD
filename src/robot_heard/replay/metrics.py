@@ -388,3 +388,84 @@ def write_metrics_json(path: Union[str, Path], metrics: Mapping[str, Any]) -> No
         except FileNotFoundError:
             pass
         raise
+
+
+def compute_r4_metrics(
+    segment_evidence: Sequence[Mapping[str, Any]],
+    *,
+    global_metrics: Optional[Mapping[str, Any]] = None,
+) -> Mapping[str, Any]:
+    """Derive R4 segment metrics without changing trace or segment evidence."""
+
+    rows = [dict(row) for row in segment_evidence]
+    if any(not row.get("segment_id") for row in rows):
+        raise MetricsError("each R4 segment evidence row requires segment_id")
+    if len({row["segment_id"] for row in rows}) != len(rows):
+        raise MetricsError("R4 segment evidence contains duplicate segment_id")
+
+    def durations(field: str) -> list[float]:
+        values = []
+        for row in rows:
+            value = row.get(field)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise MetricsError(f"R4 evidence field {field} must be numeric")
+            if not math.isfinite(float(value)):
+                raise MetricsError(f"R4 evidence field {field} must be finite")
+            values.append(float(value))
+        return values
+
+    segment_delays = durations("segment_end_to_final_wall_delay_sec") if rows else []
+    oracle_delays = []
+    asr_compute = []
+    for row in rows:
+        end_sample = row.get("end_sample")
+        sample_rate = row.get("sample_rate")
+        release = row.get("oracle_release_wall_offset_sec")
+        invocation_start = row.get("asr_invocation_start_wall_offset_sec")
+        invocation_return = row.get("asr_invocation_return_wall_offset_sec")
+        if not isinstance(end_sample, int) or not isinstance(sample_rate, int) or sample_rate <= 0:
+            raise MetricsError("R4 evidence requires integer end_sample/sample_rate")
+        if not isinstance(release, (int, float)) or release < 0:
+            raise MetricsError("R4 evidence requires oracle release wall offset")
+        oracle_delay = float(release) - (end_sample / sample_rate)
+        if oracle_delay < -1e-12:
+            raise MetricsError("oracle release delay cannot be negative")
+        oracle_delays.append(max(0.0, oracle_delay))
+        if not isinstance(invocation_start, (int, float)) or not isinstance(invocation_return, (int, float)):
+            raise MetricsError("R4 evidence requires ASR invocation boundaries")
+        duration = float(invocation_return) - float(invocation_start)
+        if duration < -1e-12:
+            raise MetricsError("ASR wall compute cannot be negative")
+        asr_compute.append(max(0.0, duration))
+
+    result = {
+        "schema_version": "r4.metrics.v1",
+        "segment_count": len(rows),
+        "final_count": sum(row.get("final_event_index") is not None for row in rows),
+        "empty_count": sum(bool(row.get("text_empty")) for row in rows),
+        "non_empty_count": sum(not bool(row.get("text_empty")) for row in rows),
+        "segment_end_to_final_wall_delay": _summary(segment_delays),
+        "oracle_release_delay": _summary(oracle_delays),
+        "asr_wall_compute": _summary(asr_compute),
+        "metric_definitions": {
+            "segment_end_to_final_wall_delay_sec": "final_observed_wall_offset_sec - end_sample / sample_rate",
+            "oracle_release_delay_sec": "oracle_release_wall_offset_sec - end_sample / sample_rate",
+            "asr_wall_compute_sec": "asr_invocation_return_wall_offset_sec - asr_invocation_start_wall_offset_sec",
+            "percentile_method": "nearest_rank",
+        },
+        "percentile_method": "nearest_rank",
+    }
+    if global_metrics is not None:
+        result["global_r3_metrics"] = {
+            key: global_metrics.get(key)
+            for key in (
+                "RTF_consume",
+                "RTF_total_compute",
+                "compute_duty",
+                "max_queue_backlog",
+                "P95_queue_backlog",
+                "delivery_lag",
+                "completion_overrun_sec",
+            )
+        }
+    return result

@@ -27,6 +27,7 @@ from robot_heard.replay.events import (
 from robot_heard.replay.runtime import LifecycleValidator
 from robot_heard.replay.source import ReplaySource
 from robot_heard.replay.trace import TraceWriter
+from robot_heard.replay.oracle import OracleReleaseGate
 from robot_heard.streaming.base import StreamingConsumer
 
 
@@ -58,11 +59,13 @@ class PacedReplayRuntime:
         trace_writer: TraceWriter,
         *,
         wall_clock: Optional[WallClock] = None,
+        oracle_gate: Optional[OracleReleaseGate] = None,
     ) -> None:
         self.source = source
         self.consumer = consumer
         self.trace_writer = trace_writer
         self.wall_clock = wall_clock or MonotonicWallClock()
+        self.oracle_gate = oracle_gate
         self.capabilities = consumer.capabilities()
         if not isinstance(self.capabilities, ConsumerCapabilities):
             raise ContractValidationError(
@@ -143,7 +146,7 @@ class PacedReplayRuntime:
         payload: dict,
         wall_time: float,
         sequence_id: Optional[int] = None,
-    ) -> None:
+    ) -> TraceEvent:
         wall_offset = self._wall_offset(wall_time)
         if wall_offset + 1e-12 < self._last_wall_offset:
             raise ContractValidationError(
@@ -163,6 +166,7 @@ class PacedReplayRuntime:
         )
         self.trace_writer.append(event)
         self._trace_events.append(event)
+        return event
 
     def _validate_source_chunk(self, chunk: AudioChunk) -> None:
         if chunk.stream_id != self.source.metadata.stream_id:
@@ -200,6 +204,31 @@ class PacedReplayRuntime:
             wall_time=scheduled_time,
             sequence_id=chunk.sequence_id,
         )
+        if self.oracle_gate is not None:
+            releases = self.oracle_gate.on_source_available(
+                chunk.end_sample,
+                scheduled_offset,
+            )
+            for release in releases:
+                self._append_trace(
+                    EventType.ORACLE_METADATA_RELEASE,
+                    logical_sample_position=release.descriptor.end_sample,
+                    payload={
+                        "segment_id": release.descriptor.segment_id,
+                        "start_sample": release.descriptor.start_sample,
+                        "end_sample": release.descriptor.end_sample,
+                        "segment_end_available_wall_offset_sec": (
+                            release.segment_end_available_wall_offset_sec
+                        ),
+                        "oracle_release_wall_offset_sec": release.oracle_release_wall_offset_sec,
+                        "oracle_release_quantization_sec": release.oracle_release_quantization_sec,
+                        "oracle_condition": release.condition,
+                    },
+                    wall_time=scheduled_time,
+                )
+                release_hook = getattr(self.consumer, "on_oracle_release", None)
+                if release_hook is not None:
+                    release_hook(release)
         if chunk.is_final_source_chunk:
             if chunk.end_sample != self.source.total_samples:
                 raise ContractValidationError(
@@ -287,12 +316,15 @@ class PacedReplayRuntime:
             event_type = EventType.ERROR
         else:  # pragma: no cover - LifecycleValidator rejects this first.
             raise ContractValidationError("unsupported consumer output event")
-        self._append_trace(
+        trace_event = self._append_trace(
             event_type,
             logical_sample_position=self._available_through_sample,
             payload=payload,
             wall_time=observation_time,
         )
+        observer = getattr(self.consumer, "on_output_observed", None)
+        if observer is not None:
+            observer(event, trace_event)
 
     def _consume_one(
         self, chunk: AudioChunk, queue: Deque[AudioChunk], delivery_time: float
@@ -385,6 +417,9 @@ class PacedReplayRuntime:
             # start() is preparation and is excluded from the measured stream.
             self.consumer.start(self.source.metadata)
             self._run_wall_origin = self.wall_clock.now()
+            origin_hook = getattr(self.consumer, "on_run_wall_origin", None)
+            if origin_hook is not None:
+                origin_hook(self._run_wall_origin)
             queue: Deque[AudioChunk] = deque()
             source_iterator = iter(self.source)
             try:
@@ -446,6 +481,11 @@ class PacedReplayRuntime:
 
             if not self._source_end_visible:
                 raise ContractValidationError("source ended without a final source chunk")
+            if self.oracle_gate is not None and self.oracle_gate.remaining_count:
+                raise ContractValidationError(
+                    "source ended with unreleased oracle segments: "
+                    f"{self.oracle_gate.remaining_count}"
+                )
             finish_start = self.wall_clock.now()
             self._append_trace(
                 EventType.FINISH_START,

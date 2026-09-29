@@ -38,6 +38,8 @@ class PacedReplayRunResult:
     source_end_sample: int
     run_wall_origin: float
     measured_wall_interval_sec: float
+    source_end_wall_offset_sec: float
+    finish_return_wall_offset_sec: float
 
 
 class PacedReplayRuntime:
@@ -109,6 +111,14 @@ class PacedReplayRuntime:
         if self._run_wall_origin is None:
             raise RuntimeError("run wall origin has not been established")
         return self._run_wall_origin + (end_sample / self.source.metadata.sample_rate)
+
+    def _clock_origin_kind(self) -> str:
+        class_name = type(self.wall_clock).__name__
+        if class_name == "FakeWallClock":
+            return "fake_wall_clock"
+        if class_name == "MonotonicWallClock":
+            return "monotonic_wall_clock"
+        return f"custom_wall_clock:{class_name}"
 
     def _state_payload(self, queue: Deque[AudioChunk]) -> dict:
         consumed = self._consumed_through_sample
@@ -468,12 +478,43 @@ class PacedReplayRuntime:
             )
             for event in output_events:
                 self._observe_output(event, queue=queue, observation_time=finish_return)
+            source_end_event = next(
+                event for event in self._trace_events if event.event_type is EventType.SOURCE_END
+            )
+            source_end_offset = source_end_event.wall_offset_sec
+            if source_end_offset is None:
+                raise ContractValidationError("SOURCE_END must have a wall offset")
+            finish_return_offset = self._wall_offset(finish_return)
+            self.trace_writer.finalize_run_provenance(
+                {
+                    "clock_origin": {
+                        "kind": self._clock_origin_kind(),
+                        "run_wall_origin": self._run_wall_origin,
+                        "wall_offset_reference": "monotonic_seconds - run_wall_origin",
+                    },
+                    "metric_window": {
+                        "start_sample": 0,
+                        "end_sample": self.source.total_samples,
+                        "wall_start_offset_sec": 0.0,
+                        "source_end_available_wall_offset_sec": source_end_offset,
+                        "measured_streaming_interval_end_wall_offset_sec": source_end_offset,
+                        "tail_interval_start_wall_offset_sec": source_end_offset,
+                        "finish_return_wall_offset_sec": finish_return_offset,
+                        "measured_run_interval_end_wall_offset_sec": finish_return_offset,
+                        "boundary_convention": (
+                            "streaming window ends at SOURCE_END; tail window ends at FINISH_RETURN"
+                        ),
+                    },
+                }
+            )
             self._finished = True
             return PacedReplayRunResult(
                 trace_events=self.trace_events,
                 source_end_sample=self.source.total_samples,
                 run_wall_origin=self._run_wall_origin,
-                measured_wall_interval_sec=self._wall_offset(finish_return),
+                measured_wall_interval_sec=finish_return_offset,
+                source_end_wall_offset_sec=source_end_offset,
+                finish_return_wall_offset_sec=finish_return_offset,
             )
         finally:
             self.trace_writer.close()

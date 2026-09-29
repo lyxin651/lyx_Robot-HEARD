@@ -194,6 +194,31 @@ def test_wall_offsets_are_non_null_monotonic_and_chunk_fields_are_absolute(tmp_p
     assert all(chunk.delivery_wall_time is not None for chunk in consumer.chunks)
 
 
+def test_runtime_finalizes_origin_and_metric_window_provenance(tmp_path):
+    source = _source(3, 1)
+    clock = FakeWallClock()
+    consumer = FakeLatencyConsumer(clock, compute_sec=0.005, emit_hypothesis=False)
+    writer, _ = _writer(tmp_path, source, consumer)
+
+    result = PacedReplayRuntime(source, consumer, writer, wall_clock=clock).run()
+    provenance = json.loads(
+        (tmp_path / "paced.trace.run.json").read_text(encoding="utf-8")
+    )
+    assert provenance["clock_origin"]["kind"] == "fake_wall_clock"
+    assert provenance["clock_origin"]["run_wall_origin"] == pytest.approx(
+        result.run_wall_origin
+    )
+    window = provenance["metric_window"]
+    assert window["wall_start_offset_sec"] == 0.0
+    assert window["source_end_available_wall_offset_sec"] == pytest.approx(
+        result.source_end_wall_offset_sec
+    )
+    assert window["finish_return_wall_offset_sec"] == pytest.approx(
+        result.finish_return_wall_offset_sec
+    )
+    assert provenance["trace_durability_policy"] == "per_event_fsync"
+
+
 def test_compute_unaware_and_compute_aware_preserve_logical_delivery_and_outputs(tmp_path):
     source_a = _source(6, 2)
     source_b = _source(6, 2)

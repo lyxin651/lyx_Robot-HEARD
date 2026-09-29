@@ -27,7 +27,7 @@ from robot_heard.replay.runtime import (
 from robot_heard.replay.paced_runtime import PacedReplayRunResult, PacedReplayRuntime
 from robot_heard.replay.metrics import MetricsError, compute_paced_metrics, write_metrics_json
 from robot_heard.replay.source import ReplaySource, SyntheticSource
-from robot_heard.replay.trace import TraceWriter
+from robot_heard.replay.trace import TraceDurabilityPolicy, TraceWriter
 from robot_heard.replay.wav_source import MultiChannelPcmWavSource, WavSourceError
 
 __all__ = [
@@ -53,6 +53,7 @@ __all__ = [
     "StreamMetadata",
     "SyntheticSource",
     "TraceEvent",
+    "TraceDurabilityPolicy",
     "TraceWriter",
     "MultiChannelPcmWavSource",
     "WavSourceError",

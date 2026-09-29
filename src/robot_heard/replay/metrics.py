@@ -127,10 +127,12 @@ def compute_paced_metrics(
     run_id: Optional[str] = None,
     deadline_budget_sec: Optional[float] = None,
     measured_wall_interval_sec: Optional[float] = None,
+    run_provenance: Optional[Mapping[str, Any]] = None,
 ) -> Mapping[str, Any]:
     """Compute R3 metrics from raw trace events without mutating them."""
 
     events = tuple(trace_events)
+    provenance = {} if run_provenance is None else dict(run_provenance)
     if not events:
         raise MetricsError("cannot compute metrics from an empty trace")
     if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate <= 0:
@@ -264,15 +266,50 @@ def compute_paced_metrics(
     if completion_event is None or completion_event.wall_offset_sec is None:
         raise MetricsError("trace has no completion observation")
 
+    source_end_index = source_end_events[0].event_index
+    completion_event_id = None
+    if completion_event.event_type is EventType.HYPOTHESIS:
+        completion_event_id = _payload(completion_event).get("event_id")
+    completion_evidence = {
+        "source_end_event_index": source_end_index,
+        "source_end_wall_offset_sec": source_end,
+        "completion_event_type": completion_event.event_type.value,
+        "completion_event_index": completion_event.event_index,
+        "completion_event_id": completion_event_id,
+        "completion_wall_offset_sec": completion_event.wall_offset_sec,
+    }
+    streaming_interval = source_end
+    tail_interval = measured_interval - source_end
+    if tail_interval < -1e-12:
+        raise MetricsError("finish return precedes source end")
+    metric_evidence = {
+        "code_commit": provenance.get("code_commit"),
+        "trace_durability_policy": provenance.get("trace_durability_policy"),
+        "clock_origin": provenance.get("clock_origin"),
+        "metric_window": provenance.get("metric_window"),
+        "source_end_event_index": source_end_index,
+        "completion_event_index": completion_event.event_index,
+    }
+
     queue_backlog_metric = {
         "max": backlog_summary["max"],
         "time_weighted_mean": time_weighted_mean_backlog,
         "p50": backlog_summary["p50"],
         "p95": backlog_summary["p95"],
         "final": final_backlog,
+        "sampling_policy": "SOURCE_AVAILABLE transitions before delivery",
+        "sample_count": len(backlog_values),
+        "sample_unit": "samples",
         "sampling": "SOURCE_AVAILABLE transitions before delivery",
         "unit": "samples",
         "seconds_per_sample": 1 / sample_rate,
+        "integration": {
+            "integration_start_wall_offset_sec": 0.0,
+            "integration_end_wall_offset_sec": measured_interval,
+            "boundary_convention": (
+                "piecewise-constant; post-event state applies until next event"
+            ),
+        },
     }
     queue_backlog_sec = {
         "max": None if queue_backlog_metric["max"] is None else queue_backlog_metric["max"] / sample_rate,
@@ -285,9 +322,12 @@ def compute_paced_metrics(
 
     return {
         "schema_version": "r3.metrics.v1",
-        "run_id": run_id,
+        "run_id": run_id if run_id is not None else provenance.get("run_id"),
+        "metric_evidence": metric_evidence,
         "source_duration_sec": source_duration,
         "measured_wall_interval_sec": measured_interval,
+        "streaming_wall_interval_sec": streaming_interval,
+        "tail_interval_sec": tail_interval,
         "metric_definitions": {
             "D_audio": "source_total_samples / sample_rate",
             "C_consume": "sum(CONSUMER_CALL_RETURN - CONSUMER_CALL_START)",
@@ -303,6 +343,12 @@ def compute_paced_metrics(
         "RTF_consume": consume_time / source_duration,
         "RTF_total_compute": (consume_time + finish_time) / source_duration,
         "compute_duty": (consume_time + finish_time) / measured_interval,
+        "compute_duty_window": {
+            "start_wall_offset_sec": 0.0,
+            "end_wall_offset_sec": measured_interval,
+            "includes_finish_tail": True,
+            "definition": "(C_consume + C_finish) / measured_run_interval",
+        },
         "max_queue_backlog": queue_backlog_metric["max"],
         "mean_queue_backlog": queue_backlog_metric["time_weighted_mean"],
         "P50_queue_backlog": queue_backlog_metric["p50"],
@@ -317,6 +363,7 @@ def compute_paced_metrics(
         "deadline": deadline,
         "processing_lag_samples": processing_lag,
         "completion_overrun_sec": completion_event.wall_offset_sec - source_end,
+        "completion_evidence": completion_evidence,
     }
 
 

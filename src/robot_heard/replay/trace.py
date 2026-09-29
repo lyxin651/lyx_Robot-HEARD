@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from enum import Enum
 from typing import Any, Mapping, Optional, Union
 
 from robot_heard.replay.events import ContractValidationError, TraceEvent
@@ -13,12 +14,26 @@ from robot_heard.replay.events import ContractValidationError, TraceEvent
 PathLike = Union[str, Path]
 
 
+class TraceDurabilityPolicy(str, Enum):
+    """Durability trade-off for append-only trace persistence.
+
+    ``PER_EVENT_FSYNC`` preserves the R1/R2 evidence behavior.  The buffered
+    policy keeps event ordering in the single scheduler thread but moves the
+    expensive durability barrier to close, so it can be explicitly selected
+    for wall-clock benchmark runs.
+    """
+
+    PER_EVENT_FSYNC = "per_event_fsync"
+    BUFFERED_CLOSE_FSYNC = "buffered_close_fsync"
+
+
 class TraceWriter:
     """Persist one event per JSONL line and a separate run sidecar.
 
-    A fresh run refuses to open either existing artifact.  Each append is
-    flushed and fsynced, matching the repository's durable JSONL evidence
-    pattern.  No resume or post-processing rewrite is supported in R1.
+    A fresh run refuses to open either existing artifact.  The default policy
+    retains the durable R1/R2 per-event behavior; R3 may explicitly select
+    buffered close-time durability.  No resume or post-processing rewrite is
+    supported.
     """
 
     REQUIRED_PROVENANCE_FIELDS = (
@@ -43,6 +58,7 @@ class TraceWriter:
         "metric_window",
         "trace_path",
         "device_provenance",
+        "trace_durability_policy",
     )
 
     def __init__(
@@ -52,6 +68,7 @@ class TraceWriter:
         run_provenance: Mapping[str, Any],
         *,
         schema_version: Optional[str] = None,
+        durability_policy: Optional[Union[TraceDurabilityPolicy, str]] = None,
     ) -> None:
         self.trace_path = Path(trace_path).expanduser().resolve(strict=False)
         self.run_provenance_path = (
@@ -66,6 +83,25 @@ class TraceWriter:
         if not isinstance(run_provenance, Mapping):
             raise ContractValidationError("run_provenance must be a mapping")
         provenance = dict(run_provenance)
+        configured_policy = durability_policy
+        if configured_policy is None:
+            configured_policy = provenance.get(
+                "trace_durability_policy", TraceDurabilityPolicy.PER_EVENT_FSYNC.value
+            )
+        try:
+            effective_policy = TraceDurabilityPolicy(configured_policy)
+        except (TypeError, ValueError) as exc:
+            raise ContractValidationError(
+                "trace_durability_policy must be per_event_fsync or buffered_close_fsync"
+            ) from exc
+        if (
+            "trace_durability_policy" in provenance
+            and provenance["trace_durability_policy"] != effective_policy.value
+        ):
+            raise ContractValidationError(
+                "durability_policy argument does not match run provenance"
+            )
+        provenance["trace_durability_policy"] = effective_policy.value
         missing = [
             field
             for field in self.REQUIRED_PROVENANCE_FIELDS
@@ -94,6 +130,8 @@ class TraceWriter:
             raise ContractValidationError("trace_path must equal the resolved trace path")
 
         self.schema_version = effective_schema_version
+        self.durability_policy = effective_policy
+        self._provenance = dict(provenance)
         self._next_event_index = 0
         self._closed = False
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +168,7 @@ class TraceWriter:
         return self._closed
 
     def append(self, event: TraceEvent) -> None:
-        """Append exactly one next event and durably flush it."""
+        """Append exactly one next event in strict event-index order."""
 
         if self._closed:
             raise RuntimeError("cannot append to a closed trace")
@@ -147,9 +185,58 @@ class TraceWriter:
             json.dumps(dict(record), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             + "\n"
         )
-        self._handle.flush()
-        os.fsync(self._handle.fileno())
+        if self.durability_policy is TraceDurabilityPolicy.PER_EVENT_FSYNC:
+            self._handle.flush()
+            os.fsync(self._handle.fileno())
         self._next_event_index += 1
+
+    def finalize_run_provenance(self, updates: Mapping[str, Any]) -> None:
+        """Atomically finalize runtime-known provenance before close.
+
+        Runtime origin and metric-window boundaries are unavailable until the
+        consumer has started and the source has finished.  This method updates
+        only the sidecar; the append-only JSONL evidence is never rewritten.
+        """
+
+        if self._closed:
+            raise RuntimeError("cannot finalize provenance after trace close")
+        if not isinstance(updates, Mapping):
+            raise ContractValidationError("provenance updates must be a mapping")
+        provenance = dict(self._provenance)
+        provenance.update(dict(updates))
+        if provenance.get("trace_path") != str(self.trace_path):
+            raise ContractValidationError("trace_path cannot change during provenance finalize")
+        if provenance.get("schema_version") != self.schema_version:
+            raise ContractValidationError("schema_version cannot change during provenance finalize")
+        missing = [
+            field for field in self.REQUIRED_PROVENANCE_FIELDS if field not in provenance
+        ]
+        if missing:
+            raise ContractValidationError(
+                "run provenance missing required fields: " + ", ".join(missing)
+            )
+        null_fields = [
+            field for field in self.REQUIRED_PROVENANCE_FIELDS if provenance[field] is None
+        ]
+        if null_fields:
+            raise ContractValidationError(
+                "run provenance required fields cannot be null: " + ", ".join(null_fields)
+            )
+        temporary = self.run_provenance_path.with_name(
+            f".{self.run_provenance_path.name}.finalizing"
+        )
+        try:
+            with temporary.open("x", encoding="utf-8") as handle:
+                json.dump(dict(provenance), handle, ensure_ascii=False, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.run_provenance_path)
+            self._provenance = provenance
+        except Exception:
+            if temporary.exists():
+                temporary.unlink()
+            raise
 
     def close(self) -> None:
         if not self._closed:

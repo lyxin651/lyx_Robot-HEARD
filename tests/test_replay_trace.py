@@ -7,6 +7,7 @@ import pytest
 from robot_heard.replay.events import ContractValidationError, EventType, TraceEvent
 from robot_heard.replay.runtime import DeterministicReplayRuntime
 from robot_heard.replay.source import SyntheticSource
+from robot_heard.replay import TraceDurabilityPolicy
 from robot_heard.replay.trace import TraceWriter
 
 from replay_helpers import RecordingConsumer, SnapshotConsumer
@@ -125,3 +126,101 @@ def test_trace_event_serialization_is_deterministic():
 
     assert event.to_record()["payload"] == {"end_sample": 2, "start_sample": 0}
     assert event.to_record()["wall_offset_sec"] is None
+
+
+def _single_event_writer(tmp_path, policy):
+    source = _source(sample_count=1, packet_samples=1)
+    trace_path = (tmp_path / "trace.jsonl").resolve()
+    run_path = (tmp_path / "trace.run.json").resolve()
+    provenance = {
+        "schema_version": "r1.event.v1",
+        "run_id": "policy",
+        "replay_mode": "COMPUTE_UNAWARE",
+        "source_identity": source.identity(),
+        "source_sha256": source.content_sha256,
+        "source_sample_rate": source.metadata.sample_rate,
+        "channel_ids": list(source.metadata.channel_ids),
+        "packet_samples": source.packet_samples,
+        "queue_policy": "lossless_unbounded",
+        "timeline_authority": "integer_sample_index",
+        "consumer_identity": "test",
+        "consumer_config": {},
+        "consumer_capabilities": {},
+        "code_commit": "test",
+        "oracle_condition": "none",
+        "warmup_load_policy": {},
+        "clock_policy": "logical",
+        "clock_origin": {"kind": "logical"},
+        "metric_window": {},
+        "trace_path": str(trace_path),
+        "device_provenance": {"status": "not_applicable"},
+    }
+    writer = TraceWriter(trace_path, run_path, provenance, durability_policy=policy)
+    event = TraceEvent(
+        schema_version="r1.event.v1",
+        event_index=0,
+        stream_id=source.metadata.stream_id,
+        event_type=EventType.RESET,
+        logical_sample_position=0,
+        payload={"state": "reset"},
+    )
+    return writer, event, trace_path, run_path
+
+
+def test_trace_durability_policy_is_recorded_and_buffered_close_is_durable(tmp_path, monkeypatch):
+    import robot_heard.replay.trace as trace_module
+
+    fsync_calls = []
+    real_fsync = trace_module.os.fsync
+
+    def count_fsync(fd):
+        fsync_calls.append(fd)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(trace_module.os, "fsync", count_fsync)
+    writer, event, trace_path, run_path = _single_event_writer(
+        tmp_path, TraceDurabilityPolicy.BUFFERED_CLOSE_FSYNC
+    )
+    writer.append(event)
+    assert len(fsync_calls) == 1  # sidecar initialization only
+    writer.close()
+    assert len(fsync_calls) == 2  # final trace flush/fsync
+    assert json.loads(run_path.read_text(encoding="utf-8"))["trace_durability_policy"] == (
+        "buffered_close_fsync"
+    )
+    assert len(trace_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_per_event_fsync_policy_remains_available(tmp_path, monkeypatch):
+    import robot_heard.replay.trace as trace_module
+
+    fsync_calls = []
+    real_fsync = trace_module.os.fsync
+    monkeypatch.setattr(
+        trace_module.os,
+        "fsync",
+        lambda fd: (fsync_calls.append(fd), real_fsync(fd))[1],
+    )
+    writer, event, _, run_path = _single_event_writer(
+        tmp_path, TraceDurabilityPolicy.PER_EVENT_FSYNC
+    )
+    writer.append(event)
+    writer.close()
+    assert len(fsync_calls) == 3  # sidecar, append, close
+    assert json.loads(run_path.read_text(encoding="utf-8"))["trace_durability_policy"] == (
+        "per_event_fsync"
+    )
+
+
+def test_trace_event_semantics_are_identical_across_durability_policies(tmp_path):
+    writer_a, event_a, trace_a, _ = _single_event_writer(
+        tmp_path / "per", TraceDurabilityPolicy.PER_EVENT_FSYNC
+    )
+    writer_b, event_b, trace_b, _ = _single_event_writer(
+        tmp_path / "buffered", TraceDurabilityPolicy.BUFFERED_CLOSE_FSYNC
+    )
+    writer_a.append(event_a)
+    writer_b.append(event_b)
+    writer_a.close()
+    writer_b.close()
+    assert trace_a.read_text(encoding="utf-8") == trace_b.read_text(encoding="utf-8")

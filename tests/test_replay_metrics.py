@@ -47,11 +47,29 @@ def test_rtf_compute_duty_completion_and_backlog_metrics(tmp_path):
     assert metrics["queue_backlog_samples"]["max"] > 0
     assert metrics["queue_backlog_samples"]["p50"] is not None
     assert metrics["queue_backlog_samples"]["p95"] is not None
+    assert metrics["queue_backlog_samples"]["sample_count"] == 10
+    assert metrics["queue_backlog_samples"]["sample_unit"] == "samples"
+    assert metrics["queue_backlog_samples"]["sampling_policy"] == (
+        "SOURCE_AVAILABLE transitions before delivery"
+    )
+    assert metrics["queue_backlog_samples"]["integration"] == {
+        "integration_start_wall_offset_sec": 0.0,
+        "integration_end_wall_offset_sec": metrics["measured_wall_interval_sec"],
+        "boundary_convention": (
+            "piecewise-constant; post-event state applies until next event"
+        ),
+    }
     assert metrics["queue_backlog_samples"]["final"] == 0
     assert metrics["queue_backlog_samples"]["sampling"].startswith("SOURCE_AVAILABLE")
     assert metrics["delivery_lag"]["max"] >= 0
     assert metrics["completion_overrun_sec"] > 0
     assert metrics["deadline"] is None
+    assert metrics["compute_duty_window"]["includes_finish_tail"] is True
+    assert metrics["completion_evidence"]["completion_event_type"] == "FINISH_RETURN"
+    assert metrics["completion_evidence"]["source_end_event_index"] is not None
+    assert metrics["completion_evidence"]["completion_event_index"] is not None
+    assert metrics["streaming_wall_interval_sec"] < metrics["measured_wall_interval_sec"]
+    assert metrics["tail_interval_sec"] > 0
     assert trace_path.read_bytes() == before
 
 

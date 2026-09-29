@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from robot_heard.replay.events import EventType, TraceEvent
+from robot_heard.replay.runtime import DeterministicReplayRuntime
+from robot_heard.replay.source import SyntheticSource
+from robot_heard.replay.trace import TraceWriter
+
+from replay_helpers import RecordingConsumer, SnapshotConsumer
+from test_replay_runtime import _writer, _source
+
+
+def test_trace_jsonl_and_run_sidecar_are_separate_durable_artifacts(tmp_path):
+    source = _source(sample_count=2, packet_samples=1)
+    consumer = RecordingConsumer()
+    writer, trace_path, run_path = _writer(tmp_path, source, consumer)
+
+    DeterministicReplayRuntime(source, consumer, writer).run()
+
+    records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    provenance = json.loads(run_path.read_text(encoding="utf-8"))
+    assert records
+    assert all(record["schema_version"] == "r1.event.v1" for record in records)
+    assert [record["event_index"] for record in records] == list(range(len(records)))
+    assert all("event_type" in record and "payload" in record for record in records)
+    assert provenance["trace_path"] == str(trace_path.resolve())
+    assert provenance["consumer_capabilities"]["reports_consumed_position"] is False
+
+
+def test_trace_writer_refuses_existing_trace_or_sidecar(tmp_path):
+    source = _source(sample_count=1, packet_samples=1)
+    consumer = RecordingConsumer()
+    writer, trace_path, run_path = _writer(tmp_path, source, consumer)
+    writer.close()
+
+    with pytest.raises(FileExistsError, match="trace already exists"):
+        _writer(tmp_path, source, consumer)
+
+    other_trace = tmp_path / "other.jsonl"
+    other_run = tmp_path / "other.run.json"
+    other_run.write_text("{}\n", encoding="utf-8")
+    provenance = {
+        "schema_version": "r1.event.v1",
+        "run_id": "other",
+        "replay_mode": "COMPUTE_UNAWARE",
+        "source_identity": source.identity(),
+        "source_sample_rate": source.metadata.sample_rate,
+        "channel_ids": list(source.metadata.channel_ids),
+        "packet_samples": source.packet_samples,
+        "queue_policy": "lossless_unbounded",
+        "consumer_identity": "RecordingConsumer",
+        "consumer_capabilities": dict(consumer.capabilities().to_dict()),
+        "code_commit": "test",
+        "oracle_condition": "synthetic_none",
+        "clock_policy": "integer_sample_fake_clock",
+        "trace_path": str(other_trace.resolve()),
+    }
+    with pytest.raises(FileExistsError, match="run provenance already exists"):
+        TraceWriter(other_trace, other_run, provenance)
+
+
+def test_trace_writer_rejects_wrong_event_index_and_schema(tmp_path):
+    source = _source(sample_count=1, packet_samples=1)
+    consumer = RecordingConsumer()
+    writer, _, _ = _writer(tmp_path, source, consumer, run_id="index")
+    event = TraceEvent(
+        schema_version="r1.event.v1",
+        event_index=1,
+        stream_id=source.metadata.stream_id,
+        event_type=EventType.RESET,
+        logical_sample_position=0,
+        payload={"state": "reset"},
+    )
+    with pytest.raises(ValueError, match="event_index"):
+        writer.append(event)
+    writer.close()
+
+
+def test_deterministic_logical_trace_repeats_for_same_input(tmp_path):
+    source_a = _source(sample_count=4, packet_samples=2)
+    consumer_a = SnapshotConsumer()
+    writer_a, trace_a, _ = _writer(tmp_path / "a", source_a, consumer_a, run_id="a")
+    DeterministicReplayRuntime(source_a, consumer_a, writer_a).run()
+
+    source_b = _source(sample_count=4, packet_samples=2)
+    consumer_b = SnapshotConsumer()
+    writer_b, trace_b, _ = _writer(tmp_path / "b", source_b, consumer_b, run_id="b")
+    DeterministicReplayRuntime(source_b, consumer_b, writer_b).run()
+
+    records_a = [json.loads(line) for line in trace_a.read_text(encoding="utf-8").splitlines()]
+    records_b = [json.loads(line) for line in trace_b.read_text(encoding="utf-8").splitlines()]
+    assert records_a == records_b
+
+
+def test_trace_event_serialization_is_deterministic():
+    event = TraceEvent(
+        schema_version="r1.event.v1",
+        event_index=0,
+        stream_id="s",
+        event_type=EventType.SOURCE_AVAILABLE,
+        logical_sample_position=2,
+        payload={"end_sample": 2, "start_sample": 0},
+        sequence_id=0,
+    )
+
+    assert event.to_record()["payload"] == {"end_sample": 2, "start_sample": 0}

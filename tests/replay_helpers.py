@@ -1,0 +1,172 @@
+"""Synthetic consumers shared by R1 contract tests."""
+
+from __future__ import annotations
+
+from typing import List, Sequence
+
+from robot_heard.replay.events import (
+    AudioChunk,
+    ConsumerCapabilities,
+    EndpointEvent,
+    ErrorEvent,
+    HypothesisEvent,
+    HypothesisKind,
+    OutputEvent,
+    StreamMetadata,
+)
+from robot_heard.streaming.base import StreamingConsumer
+
+
+class RecordingConsumer(StreamingConsumer):
+    def __init__(self) -> None:
+        self.metadata = None
+        self.chunks: List[AudioChunk] = []
+        self.reset_count = 0
+
+    def start(self, metadata: StreamMetadata) -> None:
+        self.metadata = metadata.consumer_visible_dict()
+
+    def consume(self, chunk: AudioChunk) -> Sequence[OutputEvent]:
+        self.chunks.append(chunk)
+        return ()
+
+    def finish(self) -> Sequence[OutputEvent]:
+        return ()
+
+    def reset(self) -> None:
+        self.reset_count += 1
+        self.metadata = None
+        self.chunks.clear()
+
+    def capabilities(self) -> ConsumerCapabilities:
+        return ConsumerCapabilities()
+
+class SnapshotConsumer(StreamingConsumer):
+    def __init__(self, *, reports_consumed_position: bool = True) -> None:
+        self.reports_consumed_position = reports_consumed_position
+        self.metadata = None
+        self.chunks: List[AudioChunk] = []
+        self._last_event_id = None
+        self._revision = -1
+        self._last_sample = None
+
+    def start(self, metadata: StreamMetadata) -> None:
+        self.metadata = metadata.consumer_visible_dict()
+
+    def consume(self, chunk: AudioChunk) -> Sequence[OutputEvent]:
+        self.chunks.append(chunk)
+        self._revision += 1
+        event_id = f"partial-{chunk.sequence_id}"
+        event = HypothesisEvent(
+            stream_id=chunk.stream_id,
+            scope_id="scope-0",
+            event_id=event_id,
+            revision_index=self._revision,
+            text=f"chunk-{chunk.sequence_id}",
+            kind=HypothesisKind.PARTIAL,
+            replaces_event_id=self._last_event_id,
+            consumed_through_sample=(chunk.end_sample if self.reports_consumed_position else None),
+        )
+        self._last_event_id = event_id
+        self._last_sample = chunk.end_sample
+        return (event,)
+
+    def finish(self) -> Sequence[OutputEvent]:
+        self._revision += 1
+        event = HypothesisEvent(
+            stream_id=self.metadata["stream_id"],
+            scope_id="scope-0",
+            event_id="final-0",
+            revision_index=self._revision,
+            text="final",
+            kind=HypothesisKind.FINAL,
+            replaces_event_id=self._last_event_id,
+            consumed_through_sample=(self._last_sample if self.reports_consumed_position else None),
+        )
+        return (event,)
+
+    def reset(self) -> None:
+        self.metadata = None
+        self.chunks.clear()
+        self._last_event_id = None
+        self._revision = -1
+        self._last_sample = None
+
+    def capabilities(self) -> ConsumerCapabilities:
+        return ConsumerCapabilities(
+            supports_partial=True,
+            supports_revision=True,
+            reports_consumed_position=self.reports_consumed_position,
+            stateful=True,
+        )
+
+
+class EndpointThenFinalConsumer(StreamingConsumer):
+    def __init__(self) -> None:
+        self.stream_id = None
+
+    def start(self, metadata: StreamMetadata) -> None:
+        self.stream_id = metadata.stream_id
+
+    def consume(self, chunk: AudioChunk) -> Sequence[OutputEvent]:
+        return (
+            EndpointEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-endpoint",
+                event_id="endpoint-0",
+            ),
+            HypothesisEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-endpoint",
+                event_id="final-0",
+                revision_index=0,
+                text="done",
+                kind=HypothesisKind.FINAL,
+            ),
+        )
+
+    def finish(self) -> Sequence[OutputEvent]:
+        return ()
+
+    def reset(self) -> None:
+        self.stream_id = None
+
+    def capabilities(self) -> ConsumerCapabilities:
+        return ConsumerCapabilities(supports_endpoint=True)
+
+
+class FatalThenFinalConsumer(StreamingConsumer):
+    def __init__(self) -> None:
+        self.stream_id = None
+
+    def start(self, metadata: StreamMetadata) -> None:
+        self.stream_id = metadata.stream_id
+
+    def consume(self, chunk: AudioChunk) -> Sequence[OutputEvent]:
+        return (
+            ErrorEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-error",
+                event_id="fatal-0",
+                message="synthetic fatal",
+                fatal=True,
+                recoverable=False,
+            ),
+            HypothesisEvent(
+                stream_id=self.stream_id,
+                scope_id="scope-error",
+                event_id="final-after-fatal",
+                revision_index=0,
+                text="invalid",
+                kind=HypothesisKind.FINAL,
+            ),
+        )
+
+    def finish(self) -> Sequence[OutputEvent]:
+        return ()
+
+    def reset(self) -> None:
+        self.stream_id = None
+
+    def capabilities(self) -> ConsumerCapabilities:
+        return ConsumerCapabilities()

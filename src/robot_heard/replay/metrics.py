@@ -469,3 +469,167 @@ def compute_r4_metrics(
             )
         }
     return result
+
+
+def _levenshtein_characters(left: str, right: str) -> int:
+    """Return character-level Levenshtein distance with bounded row memory."""
+
+    if len(left) < len(right):
+        left, right = right, left
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1] + (left_char != right_char),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def compute_r5a_metrics(
+    snapshots: Sequence[Mapping[str, Any]],
+    *,
+    sample_rate: int,
+    global_metrics: Optional[Mapping[str, Any]] = None,
+) -> Mapping[str, Any]:
+    """Derive R5A rolling-prefix metrics from snapshot evidence only.
+
+    ``scope_TTFT`` is intentionally measured from the Stage-2 oracle start
+    boundary ``S / Fs``.  It is not a fully-online utterance-onset metric.
+    References are not accepted by this function and therefore cannot enter
+    the decode-side evidence path.
+    """
+
+    if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate <= 0:
+        raise MetricsError("sample_rate must be a positive integer")
+    rows = [dict(row) for row in snapshots]
+    by_scope: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        scope_id = row.get("scope_id", row.get("segment_id"))
+        if not isinstance(scope_id, str) or not scope_id:
+            raise MetricsError("each R5A snapshot requires scope_id")
+        kind = row.get("kind")
+        if kind not in ("PARTIAL", "FINAL"):
+            raise MetricsError("R5A snapshot kind must be PARTIAL or FINAL")
+        revision = row.get("revision_index")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+            raise MetricsError("R5A revision_index must be a non-negative integer")
+        observed = row.get("observed_wall_offset_sec")
+        start_sample = row.get("start_sample")
+        if (
+            isinstance(start_sample, bool)
+            or not isinstance(start_sample, int)
+            or start_sample < 0
+            or not isinstance(observed, (int, float))
+            or isinstance(observed, bool)
+            or not math.isfinite(float(observed))
+        ):
+            raise MetricsError("R5A snapshots require valid start_sample and observation time")
+        by_scope.setdefault(scope_id, []).append(row)
+
+    for scope_id, scope_rows in by_scope.items():
+        scope_rows.sort(key=lambda row: row["revision_index"])
+        expected = list(range(len(scope_rows)))
+        if [row["revision_index"] for row in scope_rows] != expected:
+            raise MetricsError(f"scope {scope_id!r} has non-contiguous revisions")
+        for index, row in enumerate(scope_rows):
+            if index == 0:
+                if row.get("replaces_event_id") is not None:
+                    raise MetricsError("first R5A snapshot must not replace an event")
+            elif not row.get("replaces_event_id"):
+                raise MetricsError("replacement snapshot must identify previous event")
+
+    first_observations = []
+    ttlts = []
+    segment_end_delays = []
+    oracle_release_delays = []
+    asr_compute = []
+    partial_counts: dict[str, int] = {}
+    revision_counts: dict[str, int] = {}
+    flicker_distances: list[float] = []
+    final_rows = []
+    for scope_id, scope_rows in by_scope.items():
+        first = scope_rows[0]
+        start_sample = first["start_sample"]
+        start_time = start_sample / sample_rate
+        first_observations.append(float(first["observed_wall_offset_sec"]) - start_time)
+        partial_counts[scope_id] = sum(row["kind"] == "PARTIAL" for row in scope_rows)
+        revision_counts[scope_id] = max(0, len(scope_rows) - 1)
+        for previous, current in zip(scope_rows, scope_rows[1:]):
+            left = previous.get("text_raw")
+            right = current.get("text_raw")
+            if not isinstance(left, str) or not isinstance(right, str):
+                raise MetricsError("R5A snapshots require text_raw strings for flicker")
+            flicker_distances.append(float(_levenshtein_characters(left, right)))
+        finals = [row for row in scope_rows if row["kind"] == "FINAL"]
+        if len(finals) != 1:
+            raise MetricsError(f"scope {scope_id!r} must have exactly one FINAL")
+        final = finals[0]
+        final_rows.append(final)
+        final_observed = float(final["observed_wall_offset_sec"])
+        ttlts.append(final_observed - start_time)
+        end_sample = final.get("end_sample")
+        if isinstance(end_sample, int) and end_sample > start_sample:
+            segment_end_delays.append(final_observed - (end_sample / sample_rate))
+        start_release = first.get("scope_start_release_wall_offset_sec")
+        if isinstance(start_release, (int, float)):
+            oracle_release_delays.append(float(start_release) - start_time)
+        invocation_start = final.get("asr_invocation_start_wall_offset_sec")
+        invocation_return = final.get("asr_invocation_return_wall_offset_sec")
+        if isinstance(invocation_start, (int, float)) and isinstance(invocation_return, (int, float)):
+            value = float(invocation_return) - float(invocation_start)
+            if value < -1e-12:
+                raise MetricsError("R5A ASR wall compute cannot be negative")
+            asr_compute.append(max(0.0, value))
+
+    result: dict[str, Any] = {
+        "schema_version": "r5a.metrics.v1",
+        "segment_count": len(by_scope),
+        "final_count": len(final_rows),
+        "partial_count_per_scope": partial_counts,
+        "revision_count_per_scope": revision_counts,
+        "partial_count": sum(partial_counts.values()),
+        "revision_count": sum(revision_counts.values()),
+        "scope_TTFT": _summary(first_observations),
+        "scope_TTFT_authority": "Stage-2 oracle start boundary S/Fs",
+        "scope_TTFT_online_interpretation": "NOT fully-online onset; oracle-segmented boundary reference",
+        "scope_TTFT_stable": None,
+        "TTLT": _summary(ttlts),
+        "segment_end_to_final": _summary(segment_end_delays),
+        "oracle_release_delay": _summary(oracle_release_delays),
+        "asr_wall_compute": _summary(asr_compute),
+        "flicker": {
+            "algorithm": "character-level Levenshtein distance",
+            "unit": "characters",
+            "between": "consecutive complete hypothesis snapshots within each scope",
+            "count": len(flicker_distances),
+            **_summary(flicker_distances),
+        },
+        "metric_definitions": {
+            "scope_TTFT": "first observed PARTIAL or FINAL wall offset - Stage-2 start_sample / sample_rate",
+            "TTLT": "FINAL observed wall offset - Stage-2 start_sample / sample_rate",
+            "segment_end_to_final": "FINAL observed wall offset - Stage-2 end_sample / sample_rate",
+            "TTFT_stable": "UNAVAILABLE because supports_stable_prefix=false",
+            "percentile_method": "nearest_rank",
+        },
+        "percentile_method": "nearest_rank",
+    }
+    if global_metrics is not None:
+        result["global_r3_metrics"] = {
+            key: global_metrics.get(key)
+            for key in (
+                "RTF_consume",
+                "RTF_total_compute",
+                "compute_duty",
+                "max_queue_backlog",
+                "P95_queue_backlog",
+                "delivery_lag",
+                "completion_overrun_sec",
+            )
+        }
+    return result

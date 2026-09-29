@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import Deque, List, Optional, Tuple
+from typing import Deque, List, Optional, Tuple, Union
 
 from robot_heard.replay.clock import MonotonicWallClock, WallClock
 from robot_heard.replay.events import (
@@ -27,7 +27,14 @@ from robot_heard.replay.events import (
 from robot_heard.replay.runtime import LifecycleValidator
 from robot_heard.replay.source import ReplaySource
 from robot_heard.replay.trace import TraceWriter
-from robot_heard.replay.oracle import OracleReleaseGate
+from robot_heard.replay.oracle import (
+    OracleRelease,
+    OracleReleaseGate,
+    ScopeBoundaryRelease,
+    ScopeBoundaryReleaseGate,
+    ScopeEndRelease,
+    ScopeStartRelease,
+)
 from robot_heard.streaming.base import StreamingConsumer
 
 
@@ -59,7 +66,7 @@ class PacedReplayRuntime:
         trace_writer: TraceWriter,
         *,
         wall_clock: Optional[WallClock] = None,
-        oracle_gate: Optional[OracleReleaseGate] = None,
+        oracle_gate: Optional[Union[OracleReleaseGate, ScopeBoundaryReleaseGate]] = None,
     ) -> None:
         self.source = source
         self.consumer = consumer
@@ -220,26 +227,74 @@ class PacedReplayRuntime:
                 scheduled_offset,
             )
             for release in releases:
-                self._append_trace(
-                    EventType.ORACLE_METADATA_RELEASE,
-                    logical_sample_position=release.descriptor.end_sample,
-                    payload={
-                        "segment_id": release.descriptor.segment_id,
-                        "start_sample": release.descriptor.start_sample,
-                        "end_sample": release.descriptor.end_sample,
-                        "segment_end_available_wall_offset_sec": (
-                            release.segment_end_available_wall_offset_sec
-                        ),
-                        "oracle_release_wall_offset_sec": release.oracle_release_wall_offset_sec,
-                        "oracle_release_quantization_sec": release.oracle_release_quantization_sec,
-                        "oracle_condition": release.condition,
-                    },
-                    wall_time=scheduled_time,
-                    wall_offset_sec=scheduled_offset,
-                )
                 release_hook = getattr(self.consumer, "on_oracle_release", None)
-                if release_hook is not None:
-                    release_hook(release)
+                if isinstance(release, OracleRelease):
+                    self._append_trace(
+                        EventType.ORACLE_METADATA_RELEASE,
+                        logical_sample_position=release.descriptor.end_sample,
+                        payload={
+                            "boundary": "END",
+                            "segment_id": release.descriptor.segment_id,
+                            "start_sample": release.descriptor.start_sample,
+                            "end_sample": release.descriptor.end_sample,
+                            "segment_end_available_wall_offset_sec": (
+                                release.segment_end_available_wall_offset_sec
+                            ),
+                            "oracle_release_wall_offset_sec": release.oracle_release_wall_offset_sec,
+                            "oracle_release_quantization_sec": release.oracle_release_quantization_sec,
+                            "oracle_condition": release.condition,
+                        },
+                        wall_time=scheduled_time,
+                        wall_offset_sec=scheduled_offset,
+                    )
+                    if release_hook is not None:
+                        release_hook(release)
+                elif isinstance(release, ScopeStartRelease):
+                    self._append_trace(
+                        EventType.ORACLE_METADATA_RELEASE,
+                        logical_sample_position=release.start_sample,
+                        payload={
+                            "boundary": "START",
+                            "segment_id": release.segment_id,
+                            "start_sample": release.start_sample,
+                            "scope_start_available_wall_offset_sec": (
+                                release.scope_start_available_wall_offset_sec
+                            ),
+                            "oracle_release_wall_offset_sec": release.oracle_release_wall_offset_sec,
+                            "oracle_release_quantization_sec": release.oracle_release_quantization_sec,
+                            "oracle_condition": release.condition,
+                        },
+                        wall_time=scheduled_time,
+                        wall_offset_sec=scheduled_offset,
+                    )
+                    start_hook = getattr(self.consumer, "on_scope_start_release", None)
+                    if start_hook is not None:
+                        start_hook(release)
+                elif isinstance(release, ScopeEndRelease):
+                    self._append_trace(
+                        EventType.ORACLE_METADATA_RELEASE,
+                        logical_sample_position=release.end_sample,
+                        payload={
+                            "boundary": "END",
+                            "segment_id": release.segment_id,
+                            "end_sample": release.end_sample,
+                            "scope_end_available_wall_offset_sec": (
+                                release.scope_end_available_wall_offset_sec
+                            ),
+                            "oracle_release_wall_offset_sec": release.oracle_release_wall_offset_sec,
+                            "oracle_release_quantization_sec": release.oracle_release_quantization_sec,
+                            "oracle_condition": release.condition,
+                        },
+                        wall_time=scheduled_time,
+                        wall_offset_sec=scheduled_offset,
+                    )
+                    end_hook = getattr(self.consumer, "on_scope_end_release", None)
+                    if end_hook is not None:
+                        end_hook(release)
+                else:  # pragma: no cover - gate protocol is closed over these records.
+                    raise ContractValidationError(
+                        f"unsupported oracle release type: {type(release).__name__}"
+                    )
         if chunk.is_final_source_chunk:
             if chunk.end_sample != self.source.total_samples:
                 raise ContractValidationError(

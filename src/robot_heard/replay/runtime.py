@@ -1,4 +1,4 @@
-"""Deterministic, compute-unaware replay runtime for R1."""
+"""Deterministic, compute-unaware replay runtime for R1/R2."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from robot_heard.replay.events import (
     OutputEvent,
     TraceEvent,
 )
-from robot_heard.replay.source import SyntheticSource
+from robot_heard.replay.source import ReplaySource
 from robot_heard.replay.trace import TraceWriter
 from robot_heard.streaming.base import StreamingConsumer
 
@@ -186,11 +186,11 @@ class ReplayRunResult:
 
 
 class DeterministicReplayRuntime:
-    """Replay synthetic packets without wall-clock pacing or model execution."""
+    """Replay any validated ReplaySource without wall-clock pacing or models."""
 
     def __init__(
         self,
-        source: SyntheticSource,
+        source: ReplaySource,
         consumer: StreamingConsumer,
         trace_writer: TraceWriter,
         *,

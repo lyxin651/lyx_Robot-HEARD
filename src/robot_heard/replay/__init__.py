@@ -18,8 +18,9 @@ from robot_heard.replay.runtime import (
     DeterministicReplayRuntime,
     ReplayRunResult,
 )
-from robot_heard.replay.source import SyntheticSource
+from robot_heard.replay.source import ReplaySource, SyntheticSource
 from robot_heard.replay.trace import TraceWriter
+from robot_heard.replay.wav_source import MultiChannelPcmWavSource, WavSourceError
 
 __all__ = [
     "AudioChunk",
@@ -35,8 +36,11 @@ __all__ = [
     "LogicalClock",
     "ReplayMode",
     "ReplayRunResult",
+    "ReplaySource",
     "StreamMetadata",
     "SyntheticSource",
     "TraceEvent",
     "TraceWriter",
+    "MultiChannelPcmWavSource",
+    "WavSourceError",
 ]

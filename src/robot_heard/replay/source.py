@@ -4,13 +4,42 @@ from __future__ import annotations
 
 import hashlib
 import math
-from typing import Any, Iterator, Optional, Sequence, Tuple
+from typing import Any, Iterator, Optional, Protocol, Sequence, Tuple
 
 from robot_heard.replay.events import (
     AudioChunk,
     ContractValidationError,
     StreamMetadata,
 )
+
+
+class ReplaySource(Protocol):
+    """Minimal source boundary shared by synthetic and real replay sources."""
+
+    @property
+    def metadata(self) -> StreamMetadata:
+        """Consumer-visible stream metadata."""
+
+    @property
+    def total_samples(self) -> int:
+        """Total source frames on the integer sample timeline."""
+
+    @property
+    def packet_samples(self) -> int:
+        """Configured source packet size in samples."""
+
+    @property
+    def content_sha256(self) -> str:
+        """Deterministic source-content/semantics identity."""
+
+    def identity(self) -> str:
+        """Human-readable source identity."""
+
+    def chunks(self) -> Iterator[AudioChunk]:
+        """Yield exact adjacent half-open source packets."""
+
+    def __iter__(self) -> Iterator[AudioChunk]:
+        """Iterate source packets."""
 
 
 class SyntheticSource:

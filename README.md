@@ -214,6 +214,50 @@ The MISP 2025 Task 3 / AVDR submission contract is different: it requires per-se
 
 Passing module tests is not sufficient to claim that the backend is MISP-ready. Before S7, at least one real MISP Dev session must be run from actual baseline segmentation/reference/frontend artifacts through manifest/waveform preparation, Whisper batch inference, S5 scoring, and S6 export without hand-editing intermediate files. Segment counts and exact ID sets must reconcile at each stage. If a runnable official scorer/evaluator is available, parity must also be checked; otherwise the limitation remains explicitly `PENDING_EXTERNAL_SCORER_PARITY`.
 
+### Maintained baseline entry point
+
+The maintained integration command consumes an already-produced MISP AVSR
+Stage-2 Kaldi data directory. The baseline repository remains responsible for
+Stage 1 segmentation/frontend preparation and optional GSS; this command does
+not source baseline shell environments or modify baseline artifacts.
+
+For an explicit raw far-field channel, use the existing adapter and select the
+channel in the frontend name:
+
+```bash
+python scripts/run_misp_whisper.py \
+  --baseline-dir /path/to/stage2/M028_far \
+  --recording-id M028_S197199201241_F8N_Far \
+  --frontend raw_ch0 \
+  --output-dir /path/to/runs/m028_raw_ch0 \
+  --reference-mode auto \
+  --dry-run
+```
+
+`--dry-run`/`--prepare-only` validates the real baseline artifacts, materializes
+the explicit mono target waveforms, writes `prepared/manifest.jsonl`, and
+performs exact ID reconciliation without constructing Whisper or importing
+CUDA. A pre-materialized frontend such as GSS uses a segment-ID keyed
+`wav.scp`:
+
+```bash
+python scripts/run_misp_whisper.py \
+  --baseline-dir /path/to/stage2/M028_far \
+  --frontend gss \
+  --waveform-scp /path/to/gss/segment_wav.scp \
+  --output-dir /path/to/runs/m028_gss \
+  --config configs/whisper_openai_v0.yaml \
+  --stage all
+```
+
+The pre-materialized waveform map must already use the authoritative Stage-2
+segment IDs exactly. The command rejects the common baseline Stage-3 key
+rewrite (`014152-015076` to `014152_015076`) instead of silently changing IDs.
+Run `--stage prepare` first, then `--stage decode`, `--stage score`, or
+`--stage export` for controlled recovery. `--resume` reuses the prepared
+manifest and the existing S4 resume contract; existing artifacts are never
+silently overwritten.
+
 ## Tests
 
 ```bash

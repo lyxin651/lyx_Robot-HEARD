@@ -11,6 +11,15 @@ from .kaldi_adapter import (
     resolve_misp_channel_path,
     validate_segment_text_ids,
 )
+from .baseline_integration import (
+    MISP_BASELINE_INTEGRATION_POLICY,
+    BaselineIntegrationError,
+    BaselineManifestSummary,
+    prepare_baseline_manifest,
+    read_artifact_ids,
+    reconcile_ids,
+    reconcile_manifest_file,
+)
 from .task2_export import (
     MISP2025_TASK2_ARCHIVE_NAME,
     MISP2025_TASK2_EXPORT_POLICY,
@@ -50,6 +59,13 @@ __all__ = [
     "read_kaldi_text",
     "resolve_misp_channel_path",
     "validate_segment_text_ids",
+    "MISP_BASELINE_INTEGRATION_POLICY",
+    "BaselineIntegrationError",
+    "BaselineManifestSummary",
+    "prepare_baseline_manifest",
+    "read_artifact_ids",
+    "reconcile_ids",
+    "reconcile_manifest_file",
     "MISP2025_TASK2_ARCHIVE_NAME",
     "MISP2025_TASK2_EXPORT_POLICY",
     "MISP2025_TASK2_FORMAT_URL",

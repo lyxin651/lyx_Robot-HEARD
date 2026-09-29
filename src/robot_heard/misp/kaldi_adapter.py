@@ -51,6 +51,7 @@ class MISPKaldiAdapterSummary:
     output_dir: str
     source_audio_path: str
     limited: bool
+    reference_available: bool
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -173,8 +174,12 @@ def read_kaldi_segments(path: PathLike) -> List[KaldiSegment]:
     return segments
 
 
-def read_kaldi_text(path: PathLike) -> Dict[str, str]:
-    source = _require_regular_file(path, label="text file")
+def read_kaldi_text(path: PathLike, *, required: bool = True) -> Dict[str, str]:
+    source = Path(path).expanduser().resolve(strict=False)
+    if not source.is_file():
+        if not required:
+            return {}
+        raise FileNotFoundError(f"text file does not exist: {source}")
     records: Dict[str, str] = {}
 
     with source.open("r", encoding="utf-8") as handle:
@@ -197,7 +202,7 @@ def read_kaldi_text(path: PathLike) -> Dict[str, str]:
                 )
             records[segment_id] = reference
 
-    if not records:
+    if not records and required:
         raise MISPKaldiAdapterError(f"{source}: no text records found")
     return records
 
@@ -384,6 +389,7 @@ def prepare_misp_kaldi_recording(
     limit: Optional[int] = None,
     overwrite: bool = False,
     code_commit: Optional[str] = None,
+    require_reference: bool = False,
 ) -> MISPKaldiAdapterSummary:
     """Materialize one MISP Stage-2 recording as explicit mono ASR segments.
 
@@ -415,8 +421,9 @@ def prepare_misp_kaldi_recording(
     channels_scp_path = root / "channels.scp"
 
     segments = read_kaldi_segments(segments_path)
-    references = read_kaldi_text(text_path)
-    validate_segment_text_ids(segments, references)
+    references = read_kaldi_text(text_path, required=require_reference)
+    if references:
+        validate_segment_text_ids(segments, references)
     wav_scp = read_kaldi_scp(wav_scp_path)
     channels_scp = read_kaldi_scp(channels_scp_path)
 
@@ -518,22 +525,22 @@ def prepare_misp_kaldi_recording(
                     f"got {info.duration_sec:.6f}"
                 )
 
-            manifest_records.append(
-                {
-                    "segment_id": segment.segment_id,
-                    "audio_path": f"audio/{segment.segment_id}.wav",
-                    "reference": references[segment.segment_id],
-                    "frontend": f"raw_ch{channel_id}",
-                    "start": segment.start_sec,
-                    "duration": segment.duration_sec,
-                    "recording_id": recording_id,
-                    "channel_id": channel_id,
-                    "source_audio_path": str(source_audio),
-                    "source_recording_stem": str(channel_stem),
-                    "source_end": segment.end_sec,
-                    "adapter_policy": MISP2025_KALDI_ADAPTER_POLICY,
-                }
-            )
+            record = {
+                "segment_id": segment.segment_id,
+                "audio_path": f"audio/{segment.segment_id}.wav",
+                "frontend": f"raw_ch{channel_id}",
+                "start": segment.start_sec,
+                "duration": segment.duration_sec,
+                "recording_id": recording_id,
+                "channel_id": channel_id,
+                "source_audio_path": str(source_audio),
+                "source_recording_stem": str(channel_stem),
+                "source_end": segment.end_sec,
+                "adapter_policy": MISP2025_KALDI_ADAPTER_POLICY,
+            }
+            if references:
+                record["reference"] = references[segment.segment_id]
+            manifest_records.append(record)
 
         manifest_tmp = temporary / "manifest.jsonl"
         write_jsonl(manifest_records, manifest_tmp)
@@ -548,7 +555,9 @@ def prepare_misp_kaldi_recording(
             "segments_path": str(segments_path.resolve()),
             "segments_sha256": _sha256_file(segments_path),
             "text_path": str(text_path.resolve()),
-            "text_sha256": _sha256_file(text_path),
+            "text_sha256": _sha256_file(text_path) if text_path.is_file() else None,
+            "reference_available": bool(references),
+            "reference_required": require_reference,
             "wav_scp_path": str(wav_scp_path.resolve()),
             "wav_scp_sha256": _sha256_file(wav_scp_path),
             "channels_scp_path": str(channels_scp_path.resolve()),
@@ -603,4 +612,5 @@ def prepare_misp_kaldi_recording(
         output_dir=str(destination),
         source_audio_path=str(source_audio),
         limited=limit is not None,
+        reference_available=bool(references),
     )

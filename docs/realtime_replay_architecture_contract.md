@@ -1,9 +1,9 @@
 # Real-Time Replay Harness — R0 Architecture & Contract
 
-**Status: R0 REVIEW**
+**Status: R0 PASS**
 **Scope: architecture and contract documentation only**
-**R0 PASS: no**
-**IMPLEMENTED: no**
+**Current Gate: R1 — IN PROGRESS**
+**IMPLEMENTED: R0 documentation only**
 **SERVER_VALIDATED: no**
 
 This document is the repository-side R0 contract requested by GitHub Issue #4.

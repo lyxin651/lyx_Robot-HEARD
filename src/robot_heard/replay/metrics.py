@@ -633,3 +633,53 @@ def compute_r5a_metrics(
             )
         }
     return result
+
+
+def compute_r5b_metrics(
+    snapshots: Sequence[Mapping[str, Any]],
+    *,
+    sample_rate: int,
+    native_audit: Optional[Mapping[str, Any]] = None,
+    global_metrics: Optional[Mapping[str, Any]] = None,
+) -> Mapping[str, Any]:
+    """Derive WeNet R5B metrics from adapter evidence and the frozen R3 trace.
+
+    The lifecycle/flicker summaries intentionally share the validated R5A
+    derivation, while the schema and provenance identify this as native WeNet
+    evidence.  References are not accepted here; scoring remains a separate
+    post-run evaluator step.
+    """
+
+    result = dict(
+        compute_r5a_metrics(
+            snapshots,
+            sample_rate=sample_rate,
+            global_metrics=global_metrics,
+        )
+    )
+    result["schema_version"] = "r5b.metrics.v1"
+    result["native_streaming"] = True
+    result["stateful"] = True
+    result["supports_stable_prefix"] = False
+    result["reports_consumed_position"] = False
+    result["reports_consumed_position_reason"] = (
+        "The official C API synchronously accepts PCM16 bytes, but its feature "
+        "pipeline may retain raw samples until a complete feature frame; no "
+        "strict incorporated-sample position is exposed, so consumed is null."
+    )
+    result["endpoint_capability"] = False
+    result["endpoint_capability_reason"] = (
+        "The qualified API exposes partial_result/final_result only for this "
+        "adapter condition; endpoint detection is not enabled or inferred."
+    )
+    result["emitted_partial_policy"] = {
+        "feed_policy": "feed every complete fixed model chunk incrementally",
+        "visible_event_policy": (
+            "suppress initial empty partials and repeated visible text; emit "
+            "first non-empty or changed visible text"
+        ),
+        "final_policy": "emit FINAL exactly once at released scope end",
+        "raw_decoder_evidence": "native call/partial/final counters retained separately",
+    }
+    result["native_audit"] = None if native_audit is None else dict(native_audit)
+    return result

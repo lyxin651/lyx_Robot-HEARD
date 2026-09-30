@@ -23,12 +23,14 @@ from robot_heard.replay.paced_runtime import PacedReplayRuntime
 from robot_heard.replay.source import SyntheticSource
 from robot_heard.replay.trace import TraceWriter
 from robot_heard.streaming.adapters.wenet_u2pp import (
+    CtypesWeNetDecoderFactory,
     NativeDecodeResult,
     WeNetU2PPError,
     WeNetU2PPStreamingConsumer,
     parse_native_result,
     pcm32_to_pcm16le,
 )
+import robot_heard.streaming.adapters.wenet_u2pp as wenet_module
 
 
 class _Row:
@@ -162,6 +164,27 @@ def test_pcm_conversion_rejects_implicit_or_invalid_inputs():
         pcm32_to_pcm16le([2**31])
     with pytest.raises(WeNetU2PPError):
         pcm32_to_pcm16le(b"\0\0\0\0")
+
+
+def test_factory_accepts_official_non_streaming_chunk_size(tmp_path, monkeypatch):
+    class _FakeApi:
+        def __init__(self, library_path):
+            self.library_path = library_path
+
+    monkeypatch.setattr(wenet_module, "_WeNetApi", _FakeApi)
+    library_path = tmp_path / "libwenet_api.so"
+    library_path.write_bytes(b"test")
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    factory = CtypesWeNetDecoderFactory(
+        library_path, model_dir, wenet_chunk_size=-1
+    )
+    assert factory.wenet_chunk_size == -1
+    with pytest.raises(WeNetU2PPError):
+        CtypesWeNetDecoderFactory(library_path, model_dir, wenet_chunk_size=0)
+    with pytest.raises(WeNetU2PPError):
+        CtypesWeNetDecoderFactory(library_path, model_dir, wenet_chunk_size=-2)
 
 
 def test_native_result_parser_and_capabilities_are_explicit():

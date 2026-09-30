@@ -221,9 +221,15 @@ class CtypesWeNetDecoderFactory:
         language: str = "chs",
     ) -> None:
         if isinstance(wenet_chunk_size, bool) or not isinstance(wenet_chunk_size, int):
-            raise WeNetU2PPError("wenet_chunk_size must be a positive integer")
-        if wenet_chunk_size <= 0:
-            raise WeNetU2PPError("wenet_chunk_size must be a positive integer")
+            raise WeNetU2PPError(
+                "wenet_chunk_size must be a positive integer or -1 for "
+                "official non-streaming mode"
+            )
+        if wenet_chunk_size == 0 or wenet_chunk_size < -1:
+            raise WeNetU2PPError(
+                "wenet_chunk_size must be a positive integer or -1 for "
+                "official non-streaming mode"
+            )
         if not isinstance(language, str) or not language.strip():
             raise WeNetU2PPError("language must be non-empty")
         self.api = _WeNetApi(Path(library_path))

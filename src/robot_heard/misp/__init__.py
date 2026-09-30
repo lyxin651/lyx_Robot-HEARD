@@ -46,6 +46,11 @@ from .s6i_remediation import (
     remediate_s6i_record,
     write_s6i_remediated_jsonl,
 )
+from .timeline import (
+    Stage2SegmentSamples,
+    Stage2TimelineError,
+    read_stage2_segment_samples,
+)
 
 __all__ = [
     "MISP2025_KALDI_ADAPTER_POLICY",
@@ -88,4 +93,7 @@ __all__ = [
     "normalize_misp2025_s6i_numeric_surface",
     "remediate_s6i_record",
     "write_s6i_remediated_jsonl",
+    "Stage2SegmentSamples",
+    "Stage2TimelineError",
+    "read_stage2_segment_samples",
 ]
